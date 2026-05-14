@@ -112,14 +112,26 @@ outputs/episode_0001/prior/
 {
   "agent_type": "subtask_prior_agent",
   "stage_idx": 0,
-  "completion_conditions": ["the target object is clearly under robot control"],
-  "visual_changes": ["the gripper moves from approach pose to contact pose"],
-  "false_positive_risks": ["occlusion may hide whether the object is still supported"],
+  "skill_idx": 0,
+  "skill_description": "pick up the cup",
+  "subtask_name": "pick up the cup",
+  "completion_conditions": ["the cup is grasped and no longer resting on the table"],
+  "required_visual_evidence": ["the gripper encloses the cup and the cup is visibly lifted"],
+  "negative_conditions": ["the cup remains supported by the table"],
+  "common_false_positives": ["the gripper occludes the cup but lift-off is not visible"],
+  "ambiguous_cases": ["contact area is hidden and support state cannot be confirmed"],
+  "memory_update_guidance": {
+    "when_in_progress": "The robot is reaching for or grasping the cup, but lift-off is not confirmed.",
+    "when_completed": "Picked up the cup.",
+    "completed_progress_phrase_style": "short natural verb-object phrase"
+  },
+  "prompt_rules": ["Do not mark completion from gripper proximity alone."],
   "sampled_frame_analysis": []
 }
 ```
 
 `task_prior.json` 是父 agent 对所有子任务先验的全局调整结果。
+其中父 agent 的 `model_response.skills` 会继续使用同一套 skill schema，并加入全局顺序和跨子任务误判修正。
 
 ## 2. 基于 prior 生成结构化标注
 

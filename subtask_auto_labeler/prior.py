@@ -10,9 +10,14 @@ from .prompts import PromptCatalog
 
 SUBTASK_FRAME_KEYS = {
     "frame_reasoning",
+    "subtask_name",
     "completion_conditions",
-    "visual_changes",
-    "false_positive_risks",
+    "required_visual_evidence",
+    "negative_conditions",
+    "common_false_positives",
+    "ambiguous_cases",
+    "memory_update_guidance",
+    "prompt_rules",
     "status_hint",
 }
 PARENT_PRIOR_KEYS = {
@@ -20,7 +25,7 @@ PARENT_PRIOR_KEYS = {
     "global_completion_order",
     "global_visual_adjustments",
     "cross_subtask_false_positive_risks",
-    "subtask_priors",
+    "skills",
 }
 
 
@@ -138,11 +143,26 @@ def summarize_subtask_prior(
     completion_conditions = merge_string_lists(
         record["model_response"].get("completion_conditions", []) for record in frame_results
     )
-    visual_changes = merge_string_lists(
-        record["model_response"].get("visual_changes", []) for record in frame_results
+    required_visual_evidence = merge_string_lists(
+        record["model_response"].get("required_visual_evidence", []) for record in frame_results
     )
-    false_positive_risks = merge_string_lists(
-        record["model_response"].get("false_positive_risks", []) for record in frame_results
+    negative_conditions = merge_string_lists(
+        record["model_response"].get("negative_conditions", []) for record in frame_results
+    )
+    common_false_positives = merge_string_lists(
+        record["model_response"].get("common_false_positives", []) for record in frame_results
+    )
+    ambiguous_cases = merge_string_lists(
+        record["model_response"].get("ambiguous_cases", []) for record in frame_results
+    )
+    prompt_rules = merge_string_lists(
+        record["model_response"].get("prompt_rules", []) for record in frame_results
+    )
+    subtask_name = first_text_value(
+        record["model_response"].get("subtask_name") for record in frame_results
+    )
+    memory_update_guidance = merge_memory_update_guidance(
+        record["model_response"].get("memory_update_guidance") for record in frame_results
     )
     timeline = [
         {
@@ -161,13 +181,18 @@ def summarize_subtask_prior(
         "stage_idx": skill.stage_idx,
         "skill_idx": skill.skill_idx,
         "skill_description": skill.skill_description,
+        "subtask_name": subtask_name or skill.skill_description,
         "object_id": skill.object_id,
         "manuipation_object_id": skill.manuipation_object_id,
         "frame_duration": list(skill.frame_duration),
         "sample_count": len(frame_results),
         "completion_conditions": completion_conditions,
-        "visual_changes": visual_changes,
-        "false_positive_risks": false_positive_risks,
+        "required_visual_evidence": required_visual_evidence,
+        "negative_conditions": negative_conditions,
+        "common_false_positives": common_false_positives,
+        "ambiguous_cases": ambiguous_cases,
+        "memory_update_guidance": memory_update_guidance,
+        "prompt_rules": prompt_rules,
         "sampled_frame_analysis": timeline,
         "raw_frame_requests": frame_results,
     }
@@ -229,4 +254,34 @@ def merge_string_lists(groups) -> List[str]:
             if text and key not in seen:
                 merged.append(text)
                 seen.add(key)
+    return merged
+
+
+def first_text_value(values) -> str:
+    for value in values:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return ""
+
+
+def merge_memory_update_guidance(groups) -> JsonObject:
+    merged: JsonObject = {
+        "when_in_progress": "",
+        "when_completed": "",
+        "completed_progress_phrase_style": "short natural verb-object phrase",
+    }
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        for key in ("when_in_progress", "when_completed", "completed_progress_phrase_style"):
+            if merged.get(key):
+                continue
+            value = group.get(key)
+            if value:
+                merged[key] = str(value).strip()
+    if not merged["completed_progress_phrase_style"]:
+        merged["completed_progress_phrase_style"] = "short natural verb-object phrase"
     return merged

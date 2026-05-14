@@ -202,7 +202,10 @@ def normalize_model_response(response: JsonObject) -> JsonObject:
 
 def build_subtask_prior_index(task_prior: JsonObject) -> Dict[int, JsonObject]:
     child_index: Dict[int, JsonObject] = {}
+    child_stage_by_skill_idx: Dict[int, int] = {}
     subtasks = task_prior.get("subtask_priors")
+    if not isinstance(subtasks, list):
+        subtasks = task_prior.get("skills")
     if isinstance(subtasks, list):
         for item in subtasks:
             if not isinstance(item, dict):
@@ -210,16 +213,25 @@ def build_subtask_prior_index(task_prior: JsonObject) -> Dict[int, JsonObject]:
             stage_idx = item.get("stage_idx")
             if isinstance(stage_idx, int):
                 child_index[stage_idx] = item
+                skill_idx = item.get("skill_idx")
+                if isinstance(skill_idx, int):
+                    child_stage_by_skill_idx[skill_idx] = stage_idx
 
     adjusted_index: Dict[int, JsonObject] = {}
     model_response = task_prior.get("model_response")
     if isinstance(model_response, dict):
-        adjusted = model_response.get("subtask_priors")
+        adjusted = model_response.get("skills")
+        if not isinstance(adjusted, list):
+            adjusted = model_response.get("subtask_priors")
         if isinstance(adjusted, list):
             for item in adjusted:
                 if not isinstance(item, dict):
                     continue
                 stage_idx = item.get("stage_idx")
+                if not isinstance(stage_idx, int):
+                    skill_idx = item.get("skill_idx")
+                    if isinstance(skill_idx, int):
+                        stage_idx = child_stage_by_skill_idx.get(skill_idx, skill_idx)
                 if isinstance(stage_idx, int):
                     adjusted_index[stage_idx] = item
 
