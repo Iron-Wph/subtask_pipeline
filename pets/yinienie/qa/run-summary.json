@@ -1,0 +1,12 @@
+{
+    "ok":  true,
+    "package":  "C:\\Users\\Wph\\Desktop\\code\\subtask_auto_pipeline\\pets\\yinienie",
+    "spritesheet":  "C:\\Users\\Wph\\Desktop\\code\\subtask_auto_pipeline\\pets\\yinienie\\spritesheet.webp",
+    "contact_sheet":  "C:\\Users\\Wph\\Desktop\\code\\subtask_auto_pipeline\\pets\\yinienie\\qa\\contact-sheet.png",
+    "validation":  "C:\\Users\\Wph\\Desktop\\code\\subtask_auto_pipeline\\pets\\yinienie\\qa\\validation.json",
+    "review":  "C:\\Users\\Wph\\Desktop\\code\\subtask_auto_pipeline\\pets\\yinienie\\qa\\review.json",
+    "previews":  "C:\\Users\\Wph\\Desktop\\code\\subtask_auto_pipeline\\pets\\yinienie\\qa\\previews",
+    "installed_package":  "C:\\Users\\Wph\\.codex\\pets\\yinienie",
+    "visual_qa":  "pass",
+    "notes":  "Generated with hatch-pet workflow from the provided reference; user states mapped into the Codex 9-row atlas contract."
+}
