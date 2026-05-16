@@ -15,6 +15,7 @@
 conda create -n subtask_pipeline python=3.11 -y
 conda activate subtask_pipeline
 pip install -r requirements.txt
+python -m pip install "httpx[socks]"
 ```
 
 创建并编辑环境变量文件：
