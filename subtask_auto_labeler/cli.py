@@ -30,7 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    prior = subparsers.add_parser("prior", help="Run child subtask agents and parent task prior agent.")
+    prior = subparsers.add_parser("prior", help="Run per-skill and parent task prior generation.")
     prior.add_argument("--annotation-json", type=Path, required=True)
     prior.add_argument("--image-root", type=Path, required=True)
     prior.add_argument("-o", "--output-dir", type=Path, required=True)

@@ -75,7 +75,7 @@ manuipation_object_id 或 manipulating_object_id
 
 ## 1. 生成 Autolabel 提示信息
 
-每个 skill 会在 `frame_duration` 内均匀采样 `k` 帧，默认 `k=10`，不包含起始帧和终止帧。
+每个 skill 会在 `frame_duration` 内均匀采样 `k` 帧，默认 `k=10`，不包含起始帧和终止帧。从第二个采样帧开始，prior 请求会同时带上上一采样帧图像和上一轮响应，用于提取更明确的视觉状态转移。
 
 ```bash
 python api_subtask_auto_label.py prior \
@@ -104,19 +104,72 @@ outputs/episode_0001/prior/
   "subtask_name": "...",
   "completion_conditions": ["..."],
   "required_visual_evidence": ["..."],
+  "state_transition_evidence": ["..."],
   "negative_conditions": ["..."],
   "common_false_positives": ["..."],
-  "ambiguous_cases": ["..."],
-  "memory_update_guidance": {
-    "when_in_progress": "...",
-    "when_completed": "...",
-    "completed_progress_phrase_style": "short natural verb-object phrase"
-  },
-  "prompt_rules": ["..."]
+  "ambiguous_cases": ["..."]
 }
 ```
 
-这些字段是后续数据集生成唯一的数据特定规则来源。程序本身不再内置某个 task 的专用规则。
+这些字段是后续数据集生成唯一的数据特定规则来源。`memory` 更新格式、输出 JSON 格式、主体称谓等通用规则由 `generate_dataset.py` 的通用 prompt 固定提供，不写入每个 skill 的 prior JSON。
+
+## 子任务描述应该包含什么
+
+为了把 `api_gemini_without_wrist.py` 这类脚本改成通用于各个任务的数据生成程序，子任务提示信息应该只描述数据本身的可见判据，不包含通用写作规则、memory 更新模板或 prompt 规则。
+
+建议每个 skill 至少包含：
+
+```text
+skill_idx                    子任务序号
+skill_description            annotation 原始动作描述
+subtask_name                 短的可执行子任务名，动词 + 目标对象
+completion_conditions        完成该子任务必须满足的语义后置条件
+required_visual_evidence     标 completed 前必须看到的视觉证据
+state_transition_evidence    需要前后对比的视觉变化，例如红灯变绿、门从关到开
+negative_conditions          明确说明未完成的视觉条件
+common_false_positives       容易误判为完成但证据不足的画面
+ambiguous_cases              应保守标为 no_for_sure 的情况
+```
+
+描述原则：
+
+```text
+1. 主体统一写 robot，不写 agent。
+2. 图像视角是 robot 的 main/head camera view，不把 camera 写成执行动作的主体。
+3. 完成条件要写结果状态，不只写动作过程。
+4. 对 press / toggle / turn on / open / close 等状态变化动作，必须写清楚可见状态转移。
+5. 对 pick / place 等操作动作，必须写清楚对象支撑关系、释放关系或目标位置关系。
+6. 负例和误判条件要具体到可见证据，例如遮挡、反光、颜色不确定、只接触但未移动。
+```
+
+例如 `press the radio button` 这类 skill，好的描述应该包含：
+
+```json
+{
+  "subtask_name": "press the radio button",
+  "completion_conditions": [
+    "the target radio button has been pressed and the radio's target indicator has changed to its completed state"
+  ],
+  "required_visual_evidence": [
+    "the target button or indicator on the radio is clearly visible after the press",
+    "the completed indicator state is visually distinguishable from the previous state"
+  ],
+  "state_transition_evidence": [
+    "the target indicator changes from red to green between observations"
+  ],
+  "negative_conditions": [
+    "the target indicator is still red",
+    "the robot gripper is near the button but the indicator state has not changed"
+  ],
+  "common_false_positives": [
+    "the button is occluded by the robot gripper",
+    "a reflection or unrelated colored object looks like the target indicator"
+  ],
+  "ambiguous_cases": [
+    "the target indicator is partly hidden, overexposed, or color-ambiguous"
+  ]
+}
+```
 
 ## 2. 通用数据集生成
 
