@@ -77,12 +77,15 @@ manuipation_object_id 或 manipulating_object_id
 
 每个 skill 会在 `frame_duration` 内均匀采样 `k` 帧，默认 `k=10`，不包含起始帧和终止帧。从第二个采样帧开始，prior 请求会同时带上上一采样帧图像和上一轮响应，用于提取更明确的视觉状态转移。
 
+最终每个 skill 的列表字段默认至少生成 4 条非重复描述，可通过 `--prior-min-items` 调整。列表字段包括 `completion_conditions`、`required_visual_evidence`、`state_transition_evidence`、`negative_conditions`、`common_false_positives` 和 `ambiguous_cases`。同一字段内会要求覆盖不同角度，例如目标颜色/形状/位置/大小/数量、机器人夹爪接触或撤离、前后状态变化、遮挡、反光、运动模糊和视角歧义。
+
 ```bash
 python api_subtask_auto_label.py prior \
   --annotation-json data/annotations/episode_0001.json \
   --image-root data/images/episode_0001 \
   --output-dir outputs/episode_0001/prior \
-  --sample-k 10
+  --sample-k 10 \
+  --prior-min-items 4
 ```
 
 输出：
@@ -168,25 +171,40 @@ ambiguous_cases              应保守标为 no_for_sure 的情况
     "count": "one target button"
   },
   "completion_conditions": [
-    "the robot has pressed the radio's small circular power button and the same button/indicator is visibly green"
+    "the robot has pressed the radio's small circular power button and the same button/indicator is visibly green",
+    "the small round power button on the radio's top control area is in the completed green state after robot contact",
+    "the radio's one target power button is no longer red and is clearly green in the robot's head-camera view",
+    "the robot's left gripper can retract while the same small circular button remains green"
   ],
   "required_visual_evidence": [
     "the small round power button on the radio's top control area is clearly visible",
-    "the target button/indicator is green after the press"
+    "the target button/indicator is green after the press",
+    "the visible green mark belongs to the same dot-sized circular button rather than another part of the radio",
+    "only one target power button is being evaluated on the radio's top control area"
   ],
   "state_transition_evidence": [
-    "the same small circular power button changes from red to green between observations"
+    "the same small circular power button changes from red to green between observations",
+    "the target button is red before robot pressure and green after the press",
+    "the robot gripper moves away from the radio while the small circular indicator remains green",
+    "the color change occurs on the top control area's one target button, not on a background reflection"
   ],
   "negative_conditions": [
     "the small circular power button remains red",
-    "the robot gripper is near or touching the button but the target button/indicator is not green"
+    "the robot gripper is near or touching the button but the target button/indicator is not green",
+    "the green color is visible on another radio part but the target circular power button is still red or hidden",
+    "the target button is fully occluded, so the completed green state cannot be verified"
   ],
   "common_false_positives": [
     "the button is occluded by the robot gripper",
-    "a reflection or unrelated colored object looks like the target indicator"
+    "a reflection or unrelated colored object looks like the target indicator",
+    "the robot gripper presses the radio body near the control area but misses the small circular power button",
+    "the target button appears darker from shadow but has not visibly changed from red to green"
   ],
   "ambiguous_cases": [
-    "the target indicator is partly hidden, overexposed, or color-ambiguous"
+    "the target indicator is partly hidden, overexposed, or color-ambiguous",
+    "motion blur around the gripper or radio makes the small circular button boundary unclear",
+    "the robot's head-camera view shows the radio at an angle where the top control area is not fully visible",
+    "the gripper covers the button at the moment when the red-to-green transition would need to be checked"
   ]
 }
 ```
@@ -269,6 +287,7 @@ python api_subtask_auto_label.py run-all \
   --image-root data/images/episode_0001 \
   --output-dir outputs/episode_0001 \
   --sample-k 10 \
+  --prior-min-items 4 \
   --frame-stride 80
 ```
 
@@ -300,6 +319,8 @@ generation_user
 --max-output-tokens         最大输出 token
 --max-retries              API 错误重试次数
 --max-response-retries      无效 JSON 响应重试次数
+--sample-k                  prior 阶段每个 skill 的均匀采样帧数
+--prior-min-items           prior 阶段每个 skill 列表字段的最少条数，默认 4
 --request-delay             每次请求后的等待秒数
 --include-previous-image    generation 时同时传入上一个采样帧
 --episode-offset            批量模式跳过前 N 个 episode

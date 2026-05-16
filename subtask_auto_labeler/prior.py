@@ -37,6 +37,7 @@ PARENT_PRIOR_KEYS = {
     "cross_subtask_false_positive_risks",
     "skills",
 }
+DEFAULT_PRIOR_MIN_ITEMS = 4
 
 
 def run_prior_pipeline(
@@ -47,8 +48,11 @@ def run_prior_pipeline(
     prompt_catalog: PromptCatalog,
     gemini_client: GeminiClient,
     k: int = 10,
+    prior_min_items: int = DEFAULT_PRIOR_MIN_ITEMS,
     request_delay: float = 0.0,
 ) -> JsonObject:
+    if prior_min_items < 1:
+        raise ValueError("prior_min_items must be at least 1.")
     episode = load_episode(annotation_json, image_root)
     if not episode.task_name:
         raise ValueError("Annotation JSON must provide task_name, main_task, or task_description.")
@@ -63,6 +67,7 @@ def run_prior_pipeline(
             prompt_catalog=prompt_catalog,
             gemini_client=gemini_client,
             k=k,
+            prior_min_items=prior_min_items,
             request_delay=request_delay,
         )
         subtask_results.append(result)
@@ -73,6 +78,7 @@ def run_prior_pipeline(
         output_path=output_dir / "task_prior.json",
         prompt_catalog=prompt_catalog,
         gemini_client=gemini_client,
+        prior_min_items=prior_min_items,
     )
     prompt_info_path = output_dir / "autolabel_prompt_info.json"
     write_json(prompt_info_path, parent)
@@ -82,6 +88,7 @@ def run_prior_pipeline(
         "image_root": str(image_root),
         "output_dir": str(output_dir),
         "subtask_count": len(subtask_results),
+        "prior_min_items": prior_min_items,
         "subtask_prior_paths": [str(subtask_dir / f"subtask_{skill.stage_idx:02d}_prior.json") for skill in episode.skills],
         "task_prior_path": str(output_dir / "task_prior.json"),
         "prompt_info_path": str(prompt_info_path),
@@ -97,6 +104,7 @@ def run_subtask_prior(
     prompt_catalog: PromptCatalog,
     gemini_client: GeminiClient,
     k: int,
+    prior_min_items: int,
     request_delay: float,
 ) -> JsonObject:
     samples = sample_subtask_images(episode.image_root, skill, k)
@@ -129,6 +137,7 @@ def run_subtask_prior(
                 "frame_number": sample.frame_number,
                 "sample_index": request_index,
                 "sample_count": len(samples),
+                "prior_min_items": prior_min_items,
                 "previous_frame_context": previous_context,
             },
         )
@@ -164,12 +173,14 @@ def run_subtask_prior(
             time.sleep(request_delay)
 
     subtask_prior = summarize_subtask_prior(episode, skill, frame_results)
+    subtask_prior["prior_min_items"] = prior_min_items
     subtask_prior = consolidate_subtask_prior(
         episode=episode,
         skill=skill,
         preliminary_prior=subtask_prior,
         prompt_catalog=prompt_catalog,
         gemini_client=gemini_client,
+        prior_min_items=prior_min_items,
     )
     write_json(output_path, subtask_prior)
     print(f"[saved] {output_path}", flush=True)
@@ -248,6 +259,7 @@ def consolidate_subtask_prior(
     preliminary_prior: JsonObject,
     prompt_catalog: PromptCatalog,
     gemini_client: GeminiClient,
+    prior_min_items: int,
 ) -> JsonObject:
     system_instruction = prompt_catalog.get("subtask_prior_summary_system")
     prompt = prompt_catalog.render(
@@ -260,6 +272,7 @@ def consolidate_subtask_prior(
             "object_id": skill.object_id,
             "manuipation_object_id": skill.manuipation_object_id,
             "frame_duration": list(skill.frame_duration),
+            "prior_min_items": prior_min_items,
             "preliminary_prior_json": json.dumps(preliminary_prior, ensure_ascii=False, indent=2),
         },
     )
@@ -290,6 +303,7 @@ def run_parent_prior(
     output_path: Path,
     prompt_catalog: PromptCatalog,
     gemini_client: GeminiClient,
+    prior_min_items: int,
 ) -> JsonObject:
     system_instruction = prompt_catalog.get("parent_prior_system")
     prompt = prompt_catalog.render(
@@ -298,6 +312,7 @@ def run_parent_prior(
             "task_name": episode.task_name,
             "annotation_json": str(episode.annotation_json),
             "image_root": str(episode.image_root),
+            "prior_min_items": prior_min_items,
             "subtask_priors_json": json.dumps(subtask_results, ensure_ascii=False, indent=2),
         },
     )
@@ -312,6 +327,7 @@ def run_parent_prior(
         "task_name": episode.task_name,
         "annotation_json": str(episode.annotation_json),
         "image_root": str(episode.image_root),
+        "prior_min_items": prior_min_items,
         "model_response": response,
         "subtask_prior_count": len(subtask_results),
         "subtask_priors": subtask_results,

@@ -5,7 +5,7 @@ from typing import Optional
 from .config import build_gemini_settings
 from .generation import run_generation_pipeline
 from .gemini_client import GeminiClient
-from .prior import run_prior_pipeline
+from .prior import DEFAULT_PRIOR_MIN_ITEMS, run_prior_pipeline
 from .prompts import PromptCatalog
 
 DEFAULT_PROMPT_CONFIG = Path("prompts/default_prompts.json")
@@ -35,6 +35,12 @@ def build_parser() -> argparse.ArgumentParser:
     prior.add_argument("--image-root", type=Path, required=True)
     prior.add_argument("-o", "--output-dir", type=Path, required=True)
     prior.add_argument("-k", "--sample-k", type=int, default=10)
+    prior.add_argument(
+        "--prior-min-items",
+        type=int,
+        default=DEFAULT_PRIOR_MIN_ITEMS,
+        help="Minimum item count for each final prior list field.",
+    )
     prior.add_argument("--request-delay", type=float, default=0.0)
 
     generate = subparsers.add_parser("generate", help="Generate generic structured model_response labels.")
@@ -69,6 +75,12 @@ def build_parser() -> argparse.ArgumentParser:
     run_all.add_argument("--image-root", type=Path, required=True)
     run_all.add_argument("-o", "--output-dir", type=Path, required=True)
     run_all.add_argument("-k", "--sample-k", type=int, default=10)
+    run_all.add_argument(
+        "--prior-min-items",
+        type=int,
+        default=DEFAULT_PRIOR_MIN_ITEMS,
+        help="Minimum item count for each final prior list field.",
+    )
     run_all.add_argument("--frame-stride", type=int, default=80)
     run_all.add_argument("--request-delay", type=float, default=0.0)
     run_all.add_argument("--include-previous-image", action="store_true")
@@ -108,6 +120,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             prompt_catalog=prompt_catalog,
             gemini_client=client,
             k=args.sample_k,
+            prior_min_items=args.prior_min_items,
             request_delay=args.request_delay,
         )
         return 0
@@ -140,6 +153,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             prompt_catalog=prompt_catalog,
             gemini_client=client,
             k=args.sample_k,
+            prior_min_items=args.prior_min_items,
             request_delay=args.request_delay,
         )
         run_generation_pipeline(
