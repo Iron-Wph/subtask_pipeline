@@ -5,18 +5,26 @@
 1. `prior`：从 annotation 和图像中自动生成 autolabel 提示信息。
 2. `generate_dataset.py` / `generate`：读取上一步 autolabel 提示信息，批量生成结构化 `model_response` 标注结果。
 
-旧脚本 `api_gemini_without_wrist.py` 只作为兼容参考保留；新增主入口是 `api_subtask_auto_label.py` 和 `generate_dataset.py`。
+旧脚本 `api_gemini_without_wrist.py` 只作为兼容参考保留；推荐使用 `api_subtask_auto_label.py` 和 `generate_dataset.py`。
 
-## 安装
+## 环境安装
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+本项目推荐使用 conda 管理 Python 环境。
+
+```bash
+conda create -n subtask_pipeline python=3.11 -y
+conda activate subtask_pipeline
 pip install -r requirements.txt
-Copy-Item .env.example .env
 ```
 
-在 `.env` 中配置：
+创建并编辑环境变量文件：
+
+```bash
+cp .env.example .env
+nano .env
+```
+
+`.env` 示例：
 
 ```env
 GEMINI_API_KEY=your_key
@@ -24,7 +32,7 @@ GEMINI_MODEL=gemini-3.1-pro-preview
 GEMINI_TEMPERATURE=0.2
 ```
 
-命令行 `--model` 会覆盖 `.env` 中的 `GEMINI_MODEL`。
+命令行参数 `--model` 会覆盖 `.env` 中的 `GEMINI_MODEL`。
 
 ## 输入格式
 
@@ -68,11 +76,11 @@ manuipation_object_id 或 manipulating_object_id
 
 每个 skill 会在 `frame_duration` 内均匀采样 `k` 帧，默认 `k=10`，不包含起始帧和终止帧。
 
-```powershell
-python api_subtask_auto_label.py prior `
-  --annotation-json data\annotations\episode_0001.json `
-  --image-root data\images\episode_0001 `
-  --output-dir outputs\episode_0001\prior `
+```bash
+python api_subtask_auto_label.py prior \
+  --annotation-json data/annotations/episode_0001.json \
+  --image-root data/images/episode_0001 \
+  --output-dir outputs/episode_0001/prior \
   --sample-k 10
 ```
 
@@ -113,23 +121,23 @@ outputs/episode_0001/prior/
 
 推荐使用独立入口 `generate_dataset.py`：
 
-```powershell
-python generate_dataset.py `
-  --annotation-json data\annotations\episode_0001.json `
-  --image-root data\images\episode_0001 `
-  --autolabel-json outputs\episode_0001\prior\autolabel_prompt_info.json `
-  --output outputs\episode_0001\generation `
+```bash
+python generate_dataset.py \
+  --annotation-json data/annotations/episode_0001.json \
+  --image-root data/images/episode_0001 \
+  --autolabel-json outputs/episode_0001/prior/autolabel_prompt_info.json \
+  --output outputs/episode_0001/generation \
   --frame-stride 80
 ```
 
 也可以用主 CLI：
 
-```powershell
-python api_subtask_auto_label.py generate `
-  --annotation-json data\annotations\episode_0001.json `
-  --image-root data\images\episode_0001 `
-  --prompt-info-json outputs\episode_0001\prior\autolabel_prompt_info.json `
-  --output outputs\episode_0001\generation `
+```bash
+python api_subtask_auto_label.py generate \
+  --annotation-json data/annotations/episode_0001.json \
+  --image-root data/images/episode_0001 \
+  --prompt-info-json outputs/episode_0001/prior/autolabel_prompt_info.json \
+  --output outputs/episode_0001/generation \
   --frame-stride 80
 ```
 
@@ -163,15 +171,15 @@ outputs/priors/episode_0001/autolabel_prompt_info.json
 
 调用：
 
-```powershell
-python generate_dataset.py `
-  --annotation-json data\annotations `
-  --image-root data\images `
-  --autolabel-root outputs\priors `
-  --output outputs\generation `
-  --frame-stride 80 `
-  --episode-offset 0 `
-  --episode-limit 100 `
+```bash
+python generate_dataset.py \
+  --annotation-json data/annotations \
+  --image-root data/images \
+  --autolabel-root outputs/priors \
+  --output outputs/generation \
+  --frame-stride 80 \
+  --episode-offset 0 \
+  --episode-limit 100 \
   --resume
 ```
 
@@ -181,12 +189,12 @@ python generate_dataset.py `
 
 单条数据可直接运行：
 
-```powershell
-python api_subtask_auto_label.py run-all `
-  --annotation-json data\annotations\episode_0001.json `
-  --image-root data\images\episode_0001 `
-  --output-dir outputs\episode_0001 `
-  --sample-k 10 `
+```bash
+python api_subtask_auto_label.py run-all \
+  --annotation-json data/annotations/episode_0001.json \
+  --image-root data/images/episode_0001 \
+  --output-dir outputs/episode_0001 \
+  --sample-k 10 \
   --frame-stride 80
 ```
 
