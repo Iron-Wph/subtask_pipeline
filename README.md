@@ -1,59 +1,34 @@
-# 子任务描述自动标注程序
+# subtask_pipeline
 
-本项目新增了一套模块化 pipeline，用于：
+通用视觉任务数据集生成 pipeline。程序分两步工作：
 
-1. 读取一个任务的图像目录和 annotation JSON。
-2. 运行两级父子 prior agent：每个子 agent 只负责一个子任务，父 agent 汇总整条任务。
-3. 将 prior 结果作为提示词上下文，生成与旧脚本 `model_response` 一致的结构化标注结果。
+1. `prior`：从 annotation 和图像中自动生成 autolabel 提示信息。
+2. `generate_dataset.py` / `generate`：读取上一步 autolabel 提示信息，批量生成结构化 `model_response` 标注结果。
 
-原始 `api_gemini_without_wrist.py` 保留不动；新入口是 `api_subtask_auto_label.py`。
+旧脚本 `api_gemini_without_wrist.py` 只作为兼容参考保留；新增主入口是 `api_subtask_auto_label.py` 和 `generate_dataset.py`。
 
-## 目录结构
-
-```text
-subtask_auto_labeler/
-  config.py          # dotenv 和 Gemini 参数配置
-  dataset.py         # annotation 读取、图像目录解析、帧采样
-  gemini_client.py   # Gemini API 调用、重试、JSON 解析
-  prompts.py         # prompt JSON 加载与渲染
-  prior.py           # 子 agent / 父 agent prior 流程
-  generation.py      # 大规模结构化标注生成流程
-  cli.py             # 命令行入口
-prompts/default_prompts.json
-api_subtask_auto_label.py
-```
-
-## 环境安装
-
-建议使用虚拟环境：
+## 安装
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-```
-
-创建 `.env`：
-
-```powershell
 Copy-Item .env.example .env
 ```
 
-然后编辑 `.env`：
+在 `.env` 中配置：
 
 ```env
-GEMINI_API_KEY=你的 Gemini API Key
+GEMINI_API_KEY=your_key
 GEMINI_MODEL=gemini-3.1-pro-preview
 GEMINI_TEMPERATURE=0.2
 ```
 
-命令行里的 `--model` 会覆盖 `.env` 里的 `GEMINI_MODEL`。
+命令行 `--model` 会覆盖 `.env` 中的 `GEMINI_MODEL`。
 
-## 输入数据格式
+## 输入格式
 
-单条数据由一个 annotation JSON 和一个图像根目录组成。
-
-图像目录保持旧脚本格式：
+单条数据由一个 annotation JSON 和一个图像根目录组成：
 
 ```text
 image_root/
@@ -64,17 +39,17 @@ image_root/
     frame_000120.jpg
 ```
 
-annotation JSON 需要包含：
+annotation 示例：
 
 ```json
 {
-  "task_name": "put the cup on the table",
+  "task_name": "complete the visual task",
   "skills": [
     {
       "skill_idx": 0,
-      "skill_description": "move to the cup",
-      "object_id": ["cup"],
-      "manuipation_object_id": ["cup"],
+      "skill_description": "move to the target object",
+      "object_id": ["target object"],
+      "manuipation_object_id": ["target object"],
       "frame_duration": [1, 120]
     }
   ],
@@ -82,11 +57,16 @@ annotation JSON 需要包含：
 }
 ```
 
-兼容 `skill_annotation` 字段；`manuipation_object_id` 会优先读取，也兼容旧拼法 `manipulating_object_id`。
+兼容字段：
 
-## 1. 生成先验 prior
+```text
+skills 或 skill_annotation
+manuipation_object_id 或 manipulating_object_id
+```
 
-每个子任务会从 `frame_duration` 内部均匀采样 `k` 帧，不包含起始帧和终止帧。默认 `k=10`。
+## 1. 生成 Autolabel 提示信息
+
+每个 skill 会在 `frame_duration` 内均匀采样 `k` 帧，默认 `k=10`，不包含起始帧和终止帧。
 
 ```powershell
 python api_subtask_auto_label.py prior `
@@ -96,76 +76,64 @@ python api_subtask_auto_label.py prior `
   --sample-k 10
 ```
 
-输出示例：
+输出：
 
 ```text
 outputs/episode_0001/prior/
   subtasks/
     subtask_00_prior.json
-    subtask_01_prior.json
   task_prior.json
+  autolabel_prompt_info.json
 ```
 
-`subtask_00_prior.json` 中会包含：
+每个 skill 的提示信息结构：
 
 ```json
 {
-  "agent_type": "subtask_prior_agent",
-  "stage_idx": 0,
   "skill_idx": 0,
-  "skill_description": "pick up the cup",
-  "subtask_name": "pick up the cup",
-  "completion_conditions": ["the cup is grasped and no longer resting on the table"],
-  "required_visual_evidence": ["the gripper encloses the cup and the cup is visibly lifted"],
-  "negative_conditions": ["the cup remains supported by the table"],
-  "common_false_positives": ["the gripper occludes the cup but lift-off is not visible"],
-  "ambiguous_cases": ["contact area is hidden and support state cannot be confirmed"],
+  "skill_description": "...",
+  "subtask_name": "...",
+  "completion_conditions": ["..."],
+  "required_visual_evidence": ["..."],
+  "negative_conditions": ["..."],
+  "common_false_positives": ["..."],
+  "ambiguous_cases": ["..."],
   "memory_update_guidance": {
-    "when_in_progress": "The robot is reaching for or grasping the cup, but lift-off is not confirmed.",
-    "when_completed": "Picked up the cup.",
+    "when_in_progress": "...",
+    "when_completed": "...",
     "completed_progress_phrase_style": "short natural verb-object phrase"
   },
-  "prompt_rules": ["Do not mark completion from gripper proximity alone."],
-  "sampled_frame_analysis": []
+  "prompt_rules": ["..."]
 }
 ```
 
-`task_prior.json` 是父 agent 对所有子任务先验的全局调整结果。
-其中父 agent 的 `model_response.skills` 会继续使用同一套 skill schema，并加入全局顺序和跨子任务误判修正。
+这些字段是后续数据集生成唯一的数据特定规则来源。程序本身不再内置某个 task 的专用规则。
 
-## 2. 基于 prior 生成结构化标注
+## 2. 通用数据集生成
 
-单 episode：
+推荐使用独立入口 `generate_dataset.py`：
+
+```powershell
+python generate_dataset.py `
+  --annotation-json data\annotations\episode_0001.json `
+  --image-root data\images\episode_0001 `
+  --autolabel-json outputs\episode_0001\prior\autolabel_prompt_info.json `
+  --output outputs\episode_0001\generation `
+  --frame-stride 80
+```
+
+也可以用主 CLI：
 
 ```powershell
 python api_subtask_auto_label.py generate `
   --annotation-json data\annotations\episode_0001.json `
   --image-root data\images\episode_0001 `
-  --task-prior-json outputs\episode_0001\prior\task_prior.json `
+  --prompt-info-json outputs\episode_0001\prior\autolabel_prompt_info.json `
   --output outputs\episode_0001\generation `
   --frame-stride 80
 ```
 
-annotation 和 image root 均为目录时：
-
-```powershell
-python api_subtask_auto_label.py generate `
-  --annotation-json data\annotations `
-  --image-root data\images `
-  --prior-root outputs\priors `
-  --output outputs\generation `
-  --frame-stride 80
-```
-
-目录模式下，程序会寻找：
-
-```text
-data/annotations/episode_0001.json
-data/images/episode_0001/stage_00/...
-outputs/priors/episode_0001/task_prior.json
-```
-
-生成结果采用旧脚本的 `model_response` 结构：
+输出仍采用当前 `model_response` 结构：
 
 ```json
 {
@@ -183,9 +151,35 @@ outputs/priors/episode_0001/task_prior.json
 }
 ```
 
-## 3. 一步运行 prior + generation
+## 批量目录模式
 
-用于单条数据：
+目录结构：
+
+```text
+data/annotations/episode_0001.json
+data/images/episode_0001/stage_00/...
+outputs/priors/episode_0001/autolabel_prompt_info.json
+```
+
+调用：
+
+```powershell
+python generate_dataset.py `
+  --annotation-json data\annotations `
+  --image-root data\images `
+  --autolabel-root outputs\priors `
+  --output outputs\generation `
+  --frame-stride 80 `
+  --episode-offset 0 `
+  --episode-limit 100 `
+  --resume
+```
+
+`--resume` 会跳过已经完整生成的单 episode 输出。
+
+## 一步运行 prior + generation
+
+单条数据可直接运行：
 
 ```powershell
 python api_subtask_auto_label.py run-all `
@@ -196,31 +190,15 @@ python api_subtask_auto_label.py run-all `
   --frame-stride 80
 ```
 
-输出：
-
-```text
-outputs/episode_0001/
-  prior/
-    subtasks/subtask_00_prior.json
-    task_prior.json
-  generation/
-    episode_0001_generation.json
-    generation_results.json
-```
-
 ## Prompt 配置
 
-所有 prompt 都在 `prompts/default_prompts.json` 中，可以复制后修改：
+默认 prompt 在：
 
-```powershell
-python api_subtask_auto_label.py prior `
-  --prompt-config prompts\my_prompts.json `
-  --annotation-json data\annotations\episode_0001.json `
-  --image-root data\images\episode_0001 `
-  --output-dir outputs\episode_0001\prior
+```text
+prompts/default_prompts.json
 ```
 
-主要 prompt key：
+可通过 `--prompt-config` 替换。主要 key：
 
 ```text
 subtask_prior_system
@@ -242,4 +220,7 @@ generation_user
 --max-response-retries      无效 JSON 响应重试次数
 --request-delay             每次请求后的等待秒数
 --include-previous-image    generation 时同时传入上一个采样帧
+--episode-offset            批量模式跳过前 N 个 episode
+--episode-limit             批量模式最多处理 N 个 episode
+--resume                    跳过已有完整输出
 ```

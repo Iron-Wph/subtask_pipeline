@@ -64,6 +64,9 @@ def run_prior_pipeline(
         prompt_catalog=prompt_catalog,
         gemini_client=gemini_client,
     )
+    prompt_info_path = output_dir / "autolabel_prompt_info.json"
+    write_json(prompt_info_path, parent)
+    print(f"[saved] {prompt_info_path}", flush=True)
     return {
         "annotation_json": str(annotation_json),
         "image_root": str(image_root),
@@ -71,6 +74,7 @@ def run_prior_pipeline(
         "subtask_count": len(subtask_results),
         "subtask_prior_paths": [str(subtask_dir / f"subtask_{skill.stage_idx:02d}_prior.json") for skill in episode.skills],
         "task_prior_path": str(output_dir / "task_prior.json"),
+        "prompt_info_path": str(prompt_info_path),
         "task_prior": parent,
     }
 

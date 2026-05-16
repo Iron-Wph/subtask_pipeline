@@ -30,13 +30,30 @@ def run_generation_pipeline(
     output_path: Path,
     prompt_catalog: PromptCatalog,
     gemini_client: GeminiClient,
+    prompt_info_json: Optional[Path] = None,
+    prompt_info_root: Optional[Path] = None,
     task_prior_json: Optional[Path] = None,
     prior_root: Optional[Path] = None,
     frame_stride: int = 80,
     request_delay: float = 0.0,
     include_previous_image: bool = False,
+    episode_limit: Optional[int] = None,
+    episode_offset: int = 0,
+    resume: bool = False,
 ) -> JsonObject:
     annotation_jsons = find_annotation_jsons(annotation_path)
+    total_episode_count = len(annotation_jsons)
+    if episode_offset < 0:
+        raise ValueError("episode_offset must be >= 0")
+    if episode_limit is not None and episode_limit < 1:
+        raise ValueError("episode_limit must be >= 1")
+    if episode_offset or episode_limit is not None:
+        start = episode_offset
+        end = None if episode_limit is None else episode_offset + episode_limit
+        annotation_jsons = annotation_jsons[start:end]
+    if not annotation_jsons:
+        raise ValueError("No annotation JSON files selected. Check episode_offset and episode_limit.")
+
     multiple = len(annotation_jsons) > 1 or annotation_path.is_dir()
     if output_path.suffix.lower() == ".json":
         aggregate_path = output_path
@@ -52,16 +69,24 @@ def run_generation_pipeline(
             image_root,
             multiple_episodes=multiple,
         )
+        episode_output_path = output_dir / f"{annotation_json.stem}_generation.json"
+        if resume and episode_output_path.exists():
+            existing_output = read_json(episode_output_path)
+            if is_complete_generation_output(existing_output):
+                print(f"[skip] existing={episode_output_path}", flush=True)
+                episodes.append(existing_output)
+                continue
+
         episode_output = run_episode_generation(
             annotation_json=annotation_json,
             image_root=episode_image_root,
-            output_path=output_dir / f"{annotation_json.stem}_generation.json",
+            output_path=episode_output_path,
             prompt_catalog=prompt_catalog,
             gemini_client=gemini_client,
-            task_prior_json=resolve_task_prior_path(
+            prompt_info_json=resolve_prompt_info_path(
                 annotation_json=annotation_json,
-                explicit_task_prior_json=task_prior_json,
-                prior_root=prior_root,
+                explicit_prompt_info_json=prompt_info_json or task_prior_json,
+                prompt_info_root=prompt_info_root or prior_root,
                 multiple_episodes=multiple,
             ),
             frame_stride=frame_stride,
@@ -73,6 +98,10 @@ def run_generation_pipeline(
     aggregate = {
         "annotation_path": str(annotation_path),
         "image_root": str(image_root),
+        "episode_offset": episode_offset,
+        "episode_limit": episode_limit,
+        "selected_episode_count": len(annotation_jsons),
+        "total_episode_count": total_episode_count,
         "episode_count": len(episodes),
         "processed_count": sum(int(episode.get("processed_count", 0)) for episode in episodes),
         "episodes": episodes,
@@ -89,14 +118,14 @@ def run_episode_generation(
     output_path: Path,
     prompt_catalog: PromptCatalog,
     gemini_client: GeminiClient,
-    task_prior_json: Optional[Path],
+    prompt_info_json: Optional[Path],
     frame_stride: int,
     request_delay: float,
     include_previous_image: bool,
 ) -> JsonObject:
     episode = load_episode(annotation_json, image_root)
-    task_prior = read_json(task_prior_json) if task_prior_json else {}
-    subtask_prior_by_stage = build_subtask_prior_index(task_prior)
+    prompt_info = read_json(prompt_info_json) if prompt_info_json else {}
+    subtask_prior_by_stage = build_subtask_prior_index(prompt_info)
     sampled = iter_stride_frames(episode.annotation, image_root, frame_stride)
     old_memory = ""
     previous_image_path: Optional[Path] = None
@@ -115,7 +144,8 @@ def run_episode_generation(
                 "manuipation_object_id": skill.manuipation_object_id,
                 "frame_duration": list(skill.frame_duration),
                 "frame_number": sample.frame_number,
-                "task_prior_json": json.dumps(task_prior, ensure_ascii=False, indent=2),
+                "task_prior_json": json.dumps(prompt_info, ensure_ascii=False, indent=2),
+                "prompt_info_json": json.dumps(prompt_info, ensure_ascii=False, indent=2),
                 "subtask_prior_json": json.dumps(subtask_prior, ensure_ascii=False, indent=2),
             },
         )
@@ -179,7 +209,8 @@ def run_episode_generation(
         "annotation_json": str(annotation_json),
         "image_root": str(image_root),
         "task_name": episode.task_name,
-        "task_prior_json": str(task_prior_json) if task_prior_json else "",
+        "prompt_info_json": str(prompt_info_json) if prompt_info_json else "",
+        "task_prior_json": str(prompt_info_json) if prompt_info_json else "",
         "frame_selection": f"valid_duration_stride_{frame_stride}",
         "processed_count": len(records),
         "used_count": len(records),
@@ -245,6 +276,46 @@ def build_subtask_prior_index(task_prior: JsonObject) -> Dict[int, JsonObject]:
     return merged
 
 
+def is_complete_generation_output(output: object) -> bool:
+    return (
+        isinstance(output, dict)
+        and isinstance(output.get("results"), list)
+        and int(output.get("processed_count", 0)) == len(output.get("results", []))
+    )
+
+
+def resolve_prompt_info_path(
+    *,
+    annotation_json: Path,
+    explicit_prompt_info_json: Optional[Path],
+    prompt_info_root: Optional[Path],
+    multiple_episodes: bool,
+) -> Optional[Path]:
+    if explicit_prompt_info_json is not None:
+        return explicit_prompt_info_json
+    if prompt_info_root is None:
+        return None
+
+    candidate_dirs = []
+    if multiple_episodes:
+        candidate_dirs.append(prompt_info_root / annotation_json.stem)
+    else:
+        candidate_dirs.append(prompt_info_root)
+
+    candidate_names = (
+        "autolabel_prompt_info.json",
+        "prompt_info.json",
+        "task_prior.json",
+        f"{annotation_json.stem}.json",
+    )
+    for candidate_dir in candidate_dirs:
+        for name in candidate_names:
+            candidate = candidate_dir / name
+            if candidate.exists():
+                return candidate
+    return None
+
+
 def resolve_task_prior_path(
     *,
     annotation_json: Path,
@@ -252,14 +323,9 @@ def resolve_task_prior_path(
     prior_root: Optional[Path],
     multiple_episodes: bool,
 ) -> Optional[Path]:
-    if explicit_task_prior_json is not None:
-        return explicit_task_prior_json
-    if prior_root is None:
-        return None
-    if multiple_episodes:
-        candidate = prior_root / annotation_json.stem / "task_prior.json"
-    else:
-        candidate = prior_root / "task_prior.json"
-    if candidate.exists():
-        return candidate
-    return None
+    return resolve_prompt_info_path(
+        annotation_json=annotation_json,
+        explicit_prompt_info_json=explicit_task_prior_json,
+        prompt_info_root=prior_root,
+        multiple_episodes=multiple_episodes,
+    )

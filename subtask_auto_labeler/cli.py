@@ -37,15 +37,32 @@ def build_parser() -> argparse.ArgumentParser:
     prior.add_argument("-k", "--sample-k", type=int, default=10)
     prior.add_argument("--request-delay", type=float, default=0.0)
 
-    generate = subparsers.add_parser("generate", help="Generate structured model_response labels.")
+    generate = subparsers.add_parser("generate", help="Generate generic structured model_response labels.")
     generate.add_argument("--annotation-json", type=Path, required=True, help="Annotation JSON file or directory.")
     generate.add_argument("--image-root", type=Path, required=True)
     generate.add_argument("-o", "--output", type=Path, required=True)
-    generate.add_argument("--task-prior-json", type=Path, help="task_prior.json for a single episode.")
-    generate.add_argument("--prior-root", type=Path, help="Directory containing task_prior.json outputs.")
+    generate.add_argument(
+        "--prompt-info-json",
+        "--autolabel-json",
+        "--task-prior-json",
+        dest="prompt_info_json",
+        type=Path,
+        help="Autolabel prompt-info JSON for a single episode.",
+    )
+    generate.add_argument(
+        "--prompt-info-root",
+        "--autolabel-root",
+        "--prior-root",
+        dest="prompt_info_root",
+        type=Path,
+        help="Directory containing autolabel prompt-info JSON outputs.",
+    )
     generate.add_argument("--frame-stride", type=int, default=80)
     generate.add_argument("--request-delay", type=float, default=0.0)
     generate.add_argument("--include-previous-image", action="store_true")
+    generate.add_argument("--episode-limit", type=int, help="Process at most this many selected episodes.")
+    generate.add_argument("--episode-offset", type=int, default=0, help="Skip this many sorted episodes first.")
+    generate.add_argument("--resume", action="store_true", help="Skip complete existing per-episode outputs.")
 
     run_all = subparsers.add_parser("run-all", help="Run prior first, then structured generation for one episode.")
     run_all.add_argument("--annotation-json", type=Path, required=True)
@@ -102,11 +119,14 @@ def main(argv: Optional[list[str]] = None) -> int:
             output_path=args.output,
             prompt_catalog=prompt_catalog,
             gemini_client=client,
-            task_prior_json=args.task_prior_json,
-            prior_root=args.prior_root,
+            prompt_info_json=args.prompt_info_json,
+            prompt_info_root=args.prompt_info_root,
             frame_stride=args.frame_stride,
             request_delay=args.request_delay,
             include_previous_image=args.include_previous_image,
+            episode_limit=args.episode_limit,
+            episode_offset=args.episode_offset,
+            resume=args.resume,
         )
         return 0
 

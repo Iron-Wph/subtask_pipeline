@@ -284,65 +284,38 @@ Do not copy object names, room details, or statuses unless they match the curren
 
 Example 1:
 {
-    "reasoning": "The robot is positioned behind a glass coffee table in a living room, facing a blue sectional sofa against the wall. A red and white portable radio is visible on the wooden floor beside the blue sofa, but the robot has not yet reached it. The coffee table sits between the robot and the target, indicating the robot is still at a distance and needs to advance toward the radio.",
+    "reasoning": "The robot is approaching the target area, and the target object is visible but not yet within a clear interaction pose.",
     "new_memory": {
-        "Progress": "No subtask is finished yet. The robot is moving toward the red and white radio on the floor near the blue sofa.",
-        "World state": "The robot is in a living room with a glass coffee table in the immediate foreground. A blue L-shaped sectional sofa sits against the back wall beneath a large framed picture. A red and white portable radio rests on the wooden floor to the right of the sofa's corner. The walls are light-colored with a large decorative letter 'N' and a white floating shelf holding framed photos on the right wall. The ceiling has recessed lighting and a large white pendant lamp hangs above the coffee table."
+        "Progress": "No subtask is finished yet. The robot is moving toward the target object.",
+        "World state": "The robot is facing the workspace where the target object is visible. The target is not yet clearly ready for manipulation."
     },
-    "subtask": "move to the red and white radio on the floor near the blue sofa",
+    "subtask": "move to the target object",
     "current_skill_status": "in_progress",
     "visible_transition": "",
     "is_subtask_completed": false
-    }
 }
 
 Example 2:
 {
-    "reasoning": "The robot has advanced from the room entrance toward the target area, bringing the red and white radio into clear view on the wooden floor beside the blue sectional sofa. The glass coffee table remains prominent in the foreground, indicating the robot is still positioned at a distance from the radio and has not yet arrived at the interaction point.",
+    "reasoning": "The robot is positioned at the target interaction location and the target object is within immediate working distance.",
     "new_memory": {
-        "Progress": "No subtask is finished yet. The robot is still moving toward the red and white radio near the corner of the blue sectional sofa.",
-        "World state": "The robot faces the blue L-shaped sectional sofa against the back wall. A red and white portable radio rests on the light wooden flooring near the right corner of the sofa. A glass coffee table occupies the immediate foreground, while a large white pendant lamp hangs from the ceiling above. The right wall displays a decorative letter 'N' and a white floating shelf with framed photos, and a large framed picture hangs above the sofa."
+        "Progress": "Moved to the target object.",
+        "World state": "The robot is at the workspace with the target object reachable for the next step."
     },
-    "subtask": "move to the red and white radio on the floor near the blue sofa",
-    "current_skill_status": "in_progress",
-    "visible_transition": "",
-    "is_subtask_completed": false
-}
-
-Example 3:
-{
-    "reasoning": "The robot has moved from its previous position to a vantage point directly facing the red and white radio. The radio is now prominently positioned in the center of the view on the wooden floor, just beyond the glass coffee table and near the corner of the blue sectional sofa. Compared to the earlier state where the robot was still approaching, the radio is now clearly in close proximity and accessible, indicating the approach phase has concluded.",
-    "new_memory": {
-        "Progress": "Moved to the red and white radio on the floor near the blue sectional sofa.",
-        "World state": "The robot is positioned near the red and white portable radio resting on the light wooden flooring at the corner of the blue L-shaped sectional sofa. A glass coffee table occupies the immediate foreground, a large white pendant lamp hangs overhead, and the right wall displays a decorative letter 'N' with a white floating shelf."
-    },
-    "subtask": "move to the red and white radio on the floor near the blue sectional sofa",
+    "subtask": "move to the target object",
     "current_skill_status": "completed",
     "visible_transition": "",
     "is_subtask_completed": true
 }
 
-Example 4:
+Example 3:
 {
-    "reasoning": "The robot is positioned at the glass coffee table with the red and white radio clearly visible resting on its reflective surface within immediate reach. This visible pose and object proximity show that the navigation-to-target subtask has reached its postcondition. The gripper is not yet visible around the radio, so the pick-up motion has not yet produced a visible grasp.",
+    "reasoning": "The gripper partially occludes the target object, so the decisive support or state-change evidence is not reliable from this view.",
     "new_memory": {
-        "Progress": "Moved to the glass coffee table near the red and white radio. The robot is trying to pick up the radio from the table, but the grasp is not established yet.",
-        "World state": "The red and white portable radio rests on the reflective glass coffee table in the foreground. Behind the table is a blue L-shaped sectional sofa against the back wall, with a large abstract painting above it. A large white pendant lamp hangs from the ceiling, and a decorative letter 'N' with a white floating shelf is mounted on the right wall. The floor is light wood, and the robot is facing the radio on the table."
+        "Progress": "The robot is interacting with the target object, but completion cannot be confirmed from the current view.",
+        "World state": "The target object is near the robot gripper, with the decisive contact or support region partly hidden."
     },
-    "subtask": "pick up the red and white radio from the glass coffee table",
-    "current_skill_status": "in_progress",
-    "visible_transition": "",
-    "is_subtask_completed": false
-}
-
-Example 5:
-{
-    "reasoning": "The gripper is close to the red and white radio and partly covers the contact region, while reflections on the glass make the area under the radio difficult to read. The radio may be grasped, but the base and underside are not clearly separated from the table surface, so the image does not provide reliable lift-off evidence.",
-    "new_memory": {
-        "Progress": "Moved to the glass coffee table near the red and white radio. The robot is grasping or reaching around the radio, but lift-off cannot be confirmed from this view.",
-        "World state": "The red and white portable radio is at the glass coffee table with the robot gripper near or partly around it. The table surface is reflective, and the support/contact area below the radio is not clearly visible enough to confirm whether the radio is lifted."
-    },
-    "subtask": "pick up the red and white radio from the glass coffee table",
+    "subtask": "manipulate the target object",
     "current_skill_status": "no_for_sure",
     "visible_transition": "",
     "is_subtask_completed": false
@@ -441,7 +414,7 @@ Important rules:
     - Do not include future action plans or predicted next skills.
 12. new_memory.Progress must be a natural paragraph describing task progress up to the current moment.
     - It MUST explicitly name every subtask that has already been completed, including completed subtasks carried from Previous memory and the candidate skill if it is now completed.
-    - Write completed subtasks as concise, natural action phrases such as "Moved to the glass coffee table; picked up the red and white radio; now pressing the top button." Avoid repetitive templates like "completed the X subtask by doing Y" unless that wording is genuinely needed for clarity.
+    - Write completed subtasks as concise, natural action phrases such as "Moved to the target object; picked it up; placed it at the target location." Avoid repetitive templates like "completed the X subtask by doing Y" unless that wording is genuinely needed for clarity.
     - Do not add a previous subtask to the completed list just because the candidate skill is a later action. Completion history must come from Previous memory or direct visual evidence.
     - Do not imply a completed subtask only through scene state. For example, do not rely on "the cup is on the table" to imply "the robot placed the cup on the table"; state the completed place subtask explicitly when it has been completed.
     - If no subtask has been completed yet, say that briefly, for example "No subtask is finished yet."
@@ -472,14 +445,12 @@ World state: ...
     - If the object is still clearly resting on the table or original support, keep pick-up in_progress.
     - If the object may be grasped but contact/separation from the original support cannot be confidently judged, return "no_for_sure" rather than guessing completion.
     - If two images are provided and the object's base/contact region looks unchanged from the previous observation, do not mark pick-up completed; use in_progress if it is clearly still supported, otherwise use no_for_sure.
-    - For the radio on the glass coffee table, if the radio body/base is still touching or resting on the glass table, keep pick-up in_progress even if the gripper has closed on the handle or side.
-    - For the radio on the glass coffee table, only mark pick-up completed when the current image clearly shows the radio body itself lifted or carried, not merely the handle or top edge obscured by the gripper.
+    - For pick-up skills, if the object body/base is still touching or resting on the support surface, keep pick-up in_progress even if the gripper has closed on a handle, side, or top edge.
+    - For pick-up skills, only mark completion when the current image clearly shows the object itself lifted or carried, not merely the grasp region obscured by the gripper.
     - If the gripper is still open, merely approaching, or only adjacent to the object, keep pick-up in_progress.
     - If a later frame shows the held object lower than before but still under robot control, keep the pick-up completed.
     - For "place", the object must be visibly released and resting at the target location.
     - For "open", "close", "press", "turn on", or "turn off", the resulting state must be visibly changed.
-    - For this radio task, pressing or turning on the radio is completed only when the button or indicator is clearly and unambiguously visible as green after the press. A gripper retracting away from the button is not enough evidence by itself.
-    - If the button/indicator is occluded by the gripper, only partly visible, darkened by shadow, or ambiguous between red/black/dark green, return "no_for_sure" rather than guessing the color. Do not describe an unclear or occluded button as green just to satisfy the completion condition.
     - If the robot is actively pressing and the color change is not clearly visible yet, return "no_for_sure" when the frame cannot reliably support a label; otherwise treat it as in_progress.
 17. Set current_skill_status to exactly one of:
     - "not_started"
@@ -1111,6 +1082,45 @@ def can_resume_episode_output(output_path: Path) -> bool:
     return is_resume_complete_episode_output(output)
 
 
+def parse_episode_file_number(path: Path) -> Optional[int]:
+    match = re.fullmatch(r"episode_(\d+)\.json", path.name)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def require_episode_file_number(path: Path) -> int:
+    number = parse_episode_file_number(path)
+    if number is None:
+        raise ValueError(f"Expected episode_<number>.json filename, got: {path.name}")
+    return number
+
+
+def load_complete_episode_outputs_from_dir(output_dir: Path) -> List[Tuple[int, Path, JsonObject]]:
+    if not output_dir.exists():
+        return []
+    if not output_dir.is_dir():
+        raise ValueError(f"Resume output path is not a directory: {output_dir}")
+
+    complete_outputs: List[Tuple[int, Path, JsonObject]] = []
+    for output_file in sorted(output_dir.glob("episode_*.json")):
+        if not output_file.is_file():
+            continue
+        episode_number = parse_episode_file_number(output_file)
+        if episode_number is None:
+            continue
+        try:
+            output = read_json(output_file)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not is_resume_complete_episode_output(output):
+            continue
+        complete_outputs.append((episode_number, output_file, output))
+
+    complete_outputs.sort(key=lambda item: (item[0], item[1].name))
+    return complete_outputs
+
+
 def load_resume_aggregate_outputs(aggregate_output: Optional[Path]) -> Dict[str, JsonObject]:
     if aggregate_output is None or not aggregate_output.exists():
         return {}
@@ -1182,6 +1192,9 @@ base.find_annotation_jsons = find_annotation_jsons
 base.resolve_episode_image_root = resolve_episode_image_root
 base.get_episode_output_path = get_episode_output_path
 base.can_resume_episode_output = can_resume_episode_output
+base.parse_episode_file_number = parse_episode_file_number
+base.require_episode_file_number = require_episode_file_number
+base.load_complete_episode_outputs_from_dir = load_complete_episode_outputs_from_dir
 base.load_resume_aggregate_outputs = load_resume_aggregate_outputs
 base.build_annotation_directory_output = build_annotation_directory_output
 
@@ -1603,7 +1616,7 @@ def run_episode_planner(
     records: List[JsonObject] = []
     image_cache: Dict[int, Tuple[List[Path], Dict[int, Path]]] = {}
     completed_stage_indices: set[int] = set()
-    previous_request_image_path = ""
+    previous_valid_request_image_path = ""
 
     try:
         for sampled_idx, frame_number in enumerate(sampled_frames, start=1):
@@ -1661,7 +1674,7 @@ def run_episode_planner(
             original_image_idx = images.index(image_path) + 1
             frame_sample_label = f"stride_{sampled_idx:06d}"
             image_path_text = str(image_path)
-            previous_image_path = previous_request_image_path if include_previous_image else ""
+            previous_image_path = previous_valid_request_image_path if include_previous_image else ""
             image_dir_name = image_path.parent.name
             request_old_memory = old_memory
             request_input = base.build_request_input(
@@ -1726,7 +1739,6 @@ def run_episode_planner(
                     exc=exc,
                 )
                 records.append(record)
-                previous_request_image_path = image_path_text
                 print(
                     "[sample-error] "
                     + json.dumps(
@@ -1872,7 +1884,6 @@ def run_episode_planner(
                     record["move_to_gate_retry"] = move_to_gate_retry_metadata
                     record["raw_model_response_before_move_to_gate_retry"] = original_raw_result
                 records.append(record)
-                previous_request_image_path = image_path_text
 
                 print(
                     "[discard] "
@@ -1999,7 +2010,7 @@ def run_episode_planner(
             new_memory = model_result.get("new_memory")
             if new_memory:
                 old_memory = base.memory_to_text(new_memory)
-            previous_request_image_path = image_path_text
+            previous_valid_request_image_path = image_path_text
             if request_delay > 0:
                 print(f"[delay] wait={request_delay:.1f}s", flush=True)
                 time.sleep(request_delay)
@@ -2064,9 +2075,15 @@ def run_annotation_directory_planner(
     resume: bool = False,
     episode_workers: int = 1,
     include_previous_image: bool = False,
+    episode_limit: Optional[int] = None,
+    episode_offset: int = 0,
 ) -> JsonObject:
     annotation_jsons = base.find_annotation_jsons(annotation_path)
-    multiple_episodes = len(annotation_jsons) > 1 or annotation_path.is_dir()
+    total_episode_count = len(annotation_jsons)
+    if episode_offset < 0:
+        raise ValueError("--episode-offset must be >= 0")
+    if episode_limit is not None and episode_limit < 1:
+        raise ValueError("--episode-limit must be >= 1")
     if episode_workers < 1:
         raise ValueError("--episode-workers must be >= 1")
 
@@ -2083,13 +2100,83 @@ def run_annotation_directory_planner(
         )
 
     aggregate_output = output_path if output_path and output_path.suffix.lower() == ".json" else None
+    resume_target_count_mode = (
+        resume
+        and episode_limit is not None
+        and output_path is not None
+        and aggregate_output is None
+    )
+    preloaded_episode_outputs: List[JsonObject] = []
+
+    if resume_target_count_mode:
+        candidate_jsons = annotation_jsons[episode_offset:]
+        first_candidate_number = (
+            base.require_episode_file_number(candidate_jsons[0]) if candidate_jsons else None
+        )
+        complete_outputs = base.load_complete_episode_outputs_from_dir(output_path)
+        if first_candidate_number is not None:
+            complete_outputs = [
+                item for item in complete_outputs if item[0] >= first_candidate_number
+            ]
+        preloaded_episode_outputs = [item[2] for item in complete_outputs]
+        existing_count = len(complete_outputs)
+        remaining_count = max(0, episode_limit - existing_count)
+        last_complete_number = complete_outputs[-1][0] if complete_outputs else None
+
+        if remaining_count > 0:
+            if last_complete_number is None:
+                new_candidate_jsons = candidate_jsons
+            else:
+                new_candidate_jsons = [
+                    path
+                    for path in candidate_jsons
+                    if base.require_episode_file_number(path) > last_complete_number
+                ]
+            annotation_jsons = new_candidate_jsons[:remaining_count]
+        else:
+            annotation_jsons = []
+
+        print(
+            "[resume-target] "
+            f"output_dir={output_path} existing_complete={existing_count} "
+            f"target={episode_limit} remaining={remaining_count} "
+            f"last_complete_episode={last_complete_number if last_complete_number is not None else 'none'} "
+            f"selected_new={len(annotation_jsons)}/{total_episode_count}",
+            flush=True,
+        )
+        if remaining_count > 0 and not annotation_jsons:
+            raise ValueError(
+                "Resume target count was not reached, but no later episode_*.json files "
+                "are available after the last complete output."
+            )
+    else:
+        if episode_offset or episode_limit is not None:
+            start = episode_offset
+            end = None if episode_limit is None else episode_offset + episode_limit
+            annotation_jsons = annotation_jsons[start:end]
+            print(
+                "[episode-selection] "
+                f"offset={episode_offset} limit={episode_limit if episode_limit is not None else 'all'} "
+                f"selected={len(annotation_jsons)}/{total_episode_count}",
+                flush=True,
+            )
+        if not annotation_jsons:
+            raise ValueError(
+                "No episode_*.json files selected. Check --episode-offset and --episode-limit."
+            )
+
+    multiple_episodes = total_episode_count > 1 or annotation_path.is_dir()
     resume_aggregate_outputs = (
         base.load_resume_aggregate_outputs(aggregate_output) if resume else {}
     )
-    episode_outputs: List[Optional[JsonObject]] = [None] * len(annotation_jsons)
+    episode_outputs: List[Optional[JsonObject]] = preloaded_episode_outputs + [
+        None
+    ] * len(annotation_jsons)
 
     def completed_episode_outputs() -> List[JsonObject]:
         return [episode for episode in episode_outputs if episode is not None]
+
+    total_planned_episode_outputs = len(episode_outputs)
 
     def run_one_episode(
         episode_number: int,
@@ -2099,7 +2186,7 @@ def run_annotation_directory_planner(
     ) -> JsonObject:
         print(
             "[episode] "
-            f"{episode_number}/{len(annotation_jsons)} annotation={annotation_json} "
+            f"{episode_number}/{total_planned_episode_outputs} annotation={annotation_json} "
             f"image_root={episode_image_root} memory=reset",
             flush=True,
         )
@@ -2150,7 +2237,9 @@ def run_annotation_directory_planner(
 
     try:
         pending_jobs: List[Tuple[int, int, Path, Path, Optional[Path]]] = []
-        for output_idx, annotation_json in enumerate(annotation_jsons):
+        preloaded_count = len(preloaded_episode_outputs)
+        for local_output_idx, annotation_json in enumerate(annotation_jsons):
+            output_idx = preloaded_count + local_output_idx
             episode_number = output_idx + 1
             episode_image_root = base.resolve_episode_image_root(
                 annotation_json,
@@ -2162,7 +2251,7 @@ def run_annotation_directory_planner(
                 if base.can_resume_episode_output(episode_output_path):
                     print(
                         "[skip] "
-                        f"{episode_number}/{len(annotation_jsons)} existing={episode_output_path}",
+                        f"{episode_number}/{total_planned_episode_outputs} existing={episode_output_path}",
                         flush=True,
                     )
                     episode_outputs[output_idx] = base.read_json(episode_output_path)
@@ -2170,7 +2259,7 @@ def run_annotation_directory_planner(
 
                 print(
                     "[rerun] "
-                    f"{episode_number}/{len(annotation_jsons)} incomplete_or_error={episode_output_path}",
+                    f"{episode_number}/{total_planned_episode_outputs} incomplete_or_error={episode_output_path}",
                     flush=True,
                 )
             elif resume and aggregate_output:
@@ -2178,7 +2267,7 @@ def run_annotation_directory_planner(
                 if existing_episode:
                     print(
                         "[skip] "
-                        f"{episode_number}/{len(annotation_jsons)} aggregate={aggregate_output} "
+                        f"{episode_number}/{total_planned_episode_outputs} aggregate={aggregate_output} "
                         f"annotation={annotation_json.name}",
                         flush=True,
                     )
@@ -2634,7 +2723,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "In annotation directory mode, skip complete and error-free episodes from an "
-            "existing output directory or aggregate output JSON."
+            "existing output directory or aggregate output JSON. With an output directory "
+            "and --episode-limit, continue after the highest complete episode until the "
+            "directory reaches the target count."
         ),
     )
     parser.add_argument(
@@ -2644,6 +2735,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Number of episodes to process concurrently in annotation directory mode. "
             "Each episode still processes its own selected frames sequentially."
+        ),
+    )
+    parser.add_argument(
+        "--episode-limit",
+        type=int,
+        help=(
+            "Annotation directory mode: process at most this many sorted episode_*.json "
+            "files after applying --episode-offset. With --resume and an output directory, "
+            "this is the target number of complete episode result files in that directory."
+        ),
+    )
+    parser.add_argument(
+        "--episode-offset",
+        type=int,
+        default=0,
+        help=(
+            "Annotation directory mode: skip this many sorted episode_*.json files before "
+            "applying --episode-limit."
         ),
     )
     return parser
@@ -2686,6 +2795,8 @@ def main() -> int:
                     output_path=output_path,
                     resume=args.resume,
                     episode_workers=args.episode_workers,
+                    episode_limit=args.episode_limit,
+                    episode_offset=args.episode_offset,
                     **planner_kwargs,
                 )
             else:
