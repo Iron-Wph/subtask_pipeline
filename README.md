@@ -102,6 +102,15 @@ outputs/episode_0001/prior/
   "skill_idx": 0,
   "skill_description": "...",
   "subtask_name": "...",
+  "target_visual_description": {
+    "target_object": "...",
+    "target_part": "...",
+    "color": "...",
+    "shape": "...",
+    "position": "...",
+    "size": "...",
+    "count": "..."
+  },
   "completion_conditions": ["..."],
   "required_visual_evidence": ["..."],
   "state_transition_evidence": ["..."],
@@ -123,6 +132,7 @@ outputs/episode_0001/prior/
 skill_idx                    子任务序号
 skill_description            annotation 原始动作描述
 subtask_name                 短的可执行子任务名，动词 + 目标对象
+target_visual_description   目标对象/部件的颜色、形状、位置、大小、数量等可见属性
 completion_conditions        完成该子任务必须满足的语义后置条件
 required_visual_evidence     标 completed 前必须看到的视觉证据
 state_transition_evidence    需要前后对比的视觉变化，例如红灯变绿、门从关到开
@@ -140,6 +150,7 @@ ambiguous_cases              应保守标为 no_for_sure 的情况
 4. 对 press / toggle / turn on / open / close 等状态变化动作，必须写清楚可见状态转移。
 5. 对 pick / place 等操作动作，必须写清楚对象支撑关系、释放关系或目标位置关系。
 6. 负例和误判条件要具体到可见证据，例如遮挡、反光、颜色不确定、只接触但未移动。
+7. 不要只写 `visible state change`、`indicator turns on`、`button is pressed` 这类泛化短语；应写清楚同一个目标部件的颜色、形状、位置和前后状态，例如 “the same small circular power button changes from red to green”。
 ```
 
 例如 `press the radio button` 这类 skill，好的描述应该包含：
@@ -147,19 +158,28 @@ ambiguous_cases              应保守标为 no_for_sure 的情况
 ```json
 {
   "subtask_name": "press the radio button",
+  "target_visual_description": {
+    "target_object": "radio",
+    "target_part": "small circular power button on the top control area",
+    "color": "red before completion, green after completion",
+    "shape": "small round indicator/button",
+    "position": "on the top control area of the radio",
+    "size": "small dot-sized button relative to the radio body",
+    "count": "one target button"
+  },
   "completion_conditions": [
-    "the target radio button has been pressed and the radio's target indicator has changed to its completed state"
+    "the robot has pressed the radio's small circular power button and the same button/indicator is visibly green"
   ],
   "required_visual_evidence": [
-    "the target button or indicator on the radio is clearly visible after the press",
-    "the completed indicator state is visually distinguishable from the previous state"
+    "the small round power button on the radio's top control area is clearly visible",
+    "the target button/indicator is green after the press"
   ],
   "state_transition_evidence": [
-    "the target indicator changes from red to green between observations"
+    "the same small circular power button changes from red to green between observations"
   ],
   "negative_conditions": [
-    "the target indicator is still red",
-    "the robot gripper is near the button but the indicator state has not changed"
+    "the small circular power button remains red",
+    "the robot gripper is near or touching the button but the target button/indicator is not green"
   ],
   "common_false_positives": [
     "the button is occluded by the robot gripper",

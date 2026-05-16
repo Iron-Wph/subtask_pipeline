@@ -11,6 +11,7 @@ from .prompts import PromptCatalog
 SUBTASK_FRAME_KEYS = {
     "frame_reasoning",
     "subtask_name",
+    "target_visual_description",
     "completion_conditions",
     "required_visual_evidence",
     "state_transition_evidence",
@@ -18,6 +19,16 @@ SUBTASK_FRAME_KEYS = {
     "common_false_positives",
     "ambiguous_cases",
     "status_hint",
+}
+SUBTASK_SUMMARY_KEYS = {
+    "subtask_name",
+    "target_visual_description",
+    "completion_conditions",
+    "required_visual_evidence",
+    "state_transition_evidence",
+    "negative_conditions",
+    "common_false_positives",
+    "ambiguous_cases",
 }
 PARENT_PRIOR_KEYS = {
     "task_summary",
@@ -153,6 +164,13 @@ def run_subtask_prior(
             time.sleep(request_delay)
 
     subtask_prior = summarize_subtask_prior(episode, skill, frame_results)
+    subtask_prior = consolidate_subtask_prior(
+        episode=episode,
+        skill=skill,
+        preliminary_prior=subtask_prior,
+        prompt_catalog=prompt_catalog,
+        gemini_client=gemini_client,
+    )
     write_json(output_path, subtask_prior)
     print(f"[saved] {output_path}", flush=True)
     return subtask_prior
@@ -184,6 +202,9 @@ def summarize_subtask_prior(
     subtask_name = first_text_value(
         record["model_response"].get("subtask_name") for record in frame_results
     )
+    target_visual_description = first_json_object(
+        record["model_response"].get("target_visual_description") for record in frame_results
+    )
     timeline = [
         {
             "frame_number": record["frame_number"],
@@ -204,6 +225,7 @@ def summarize_subtask_prior(
         "skill_idx": skill.skill_idx,
         "skill_description": skill.skill_description,
         "subtask_name": subtask_name or skill.skill_description,
+        "target_visual_description": target_visual_description,
         "object_id": skill.object_id,
         "manuipation_object_id": skill.manuipation_object_id,
         "frame_duration": list(skill.frame_duration),
@@ -217,6 +239,48 @@ def summarize_subtask_prior(
         "sampled_frame_analysis": timeline,
         "raw_frame_requests": frame_results,
     }
+
+
+def consolidate_subtask_prior(
+    *,
+    episode: EpisodeData,
+    skill: SkillSpec,
+    preliminary_prior: JsonObject,
+    prompt_catalog: PromptCatalog,
+    gemini_client: GeminiClient,
+) -> JsonObject:
+    system_instruction = prompt_catalog.get("subtask_prior_summary_system")
+    prompt = prompt_catalog.render(
+        "subtask_prior_summary_user",
+        {
+            "task_name": episode.task_name,
+            "stage_idx": skill.stage_idx,
+            "skill_idx": skill.skill_idx,
+            "skill_description": skill.skill_description,
+            "object_id": skill.object_id,
+            "manuipation_object_id": skill.manuipation_object_id,
+            "frame_duration": list(skill.frame_duration),
+            "preliminary_prior_json": json.dumps(preliminary_prior, ensure_ascii=False, indent=2),
+        },
+    )
+    print(
+        "[prior-subtask-summary] "
+        f"stage_idx={skill.stage_idx} skill_idx={skill.skill_idx}",
+        flush=True,
+    )
+    response, metadata = gemini_client.generate_json(
+        system_instruction=system_instruction,
+        prompt=prompt,
+        required_keys=SUBTASK_SUMMARY_KEYS,
+    )
+
+    consolidated = dict(preliminary_prior)
+    for key in SUBTASK_SUMMARY_KEYS:
+        consolidated[key] = response.get(key)
+    consolidated["summary_model_response"] = response
+    if metadata:
+        consolidated["summary_google_response_metadata"] = metadata
+    return consolidated
 
 
 def run_parent_prior(
@@ -286,3 +350,10 @@ def first_text_value(values) -> str:
         if text:
             return text
     return ""
+
+
+def first_json_object(values) -> JsonObject:
+    for value in values:
+        if isinstance(value, dict):
+            return value
+    return {}
