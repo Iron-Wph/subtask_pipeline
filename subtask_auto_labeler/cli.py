@@ -66,6 +66,11 @@ def build_parser() -> argparse.ArgumentParser:
     generate.add_argument("--frame-stride", type=int, default=80)
     generate.add_argument("--request-delay", type=float, default=0.0)
     generate.add_argument("--include-previous-image", action="store_true")
+    generate.add_argument(
+        "--save-rendered-prompts",
+        action="store_true",
+        help="Save the full rendered system/user prompt for every generation request.",
+    )
     generate.add_argument("--episode-limit", type=int, help="Process at most this many selected episodes.")
     generate.add_argument("--episode-offset", type=int, default=0, help="Skip this many sorted episodes first.")
     generate.add_argument("--resume", action="store_true", help="Skip complete existing per-episode outputs.")
@@ -84,6 +89,11 @@ def build_parser() -> argparse.ArgumentParser:
     run_all.add_argument("--frame-stride", type=int, default=80)
     run_all.add_argument("--request-delay", type=float, default=0.0)
     run_all.add_argument("--include-previous-image", action="store_true")
+    run_all.add_argument(
+        "--save-rendered-prompts",
+        action="store_true",
+        help="Save the full rendered system/user prompt for every generation request.",
+    )
     return parser
 
 
@@ -140,6 +150,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             episode_limit=args.episode_limit,
             episode_offset=args.episode_offset,
             resume=args.resume,
+            save_rendered_prompts=args.save_rendered_prompts,
         )
         return 0
 
@@ -166,6 +177,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             frame_stride=args.frame_stride,
             request_delay=args.request_delay,
             include_previous_image=args.include_previous_image,
+            save_rendered_prompts=args.save_rendered_prompts,
         )
         return 0
 

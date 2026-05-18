@@ -4,6 +4,8 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from .dataset import (
+    SampledFrame,
+    SkillSpec,
     find_annotation_jsons,
     iter_stride_frames,
     load_episode,
@@ -59,6 +61,7 @@ def run_generation_pipeline(
     episode_limit: Optional[int] = None,
     episode_offset: int = 0,
     resume: bool = False,
+    save_rendered_prompts: bool = False,
 ) -> JsonObject:
     annotation_jsons = find_annotation_jsons(annotation_path)
     total_episode_count = len(annotation_jsons)
@@ -111,6 +114,7 @@ def run_generation_pipeline(
             frame_stride=frame_stride,
             request_delay=request_delay,
             include_previous_image=include_previous_image,
+            save_rendered_prompts=save_rendered_prompts,
         )
         episodes.append(episode_output)
 
@@ -141,6 +145,7 @@ def run_episode_generation(
     frame_stride: int,
     request_delay: float,
     include_previous_image: bool,
+    save_rendered_prompts: bool = False,
 ) -> JsonObject:
     episode = load_episode(annotation_json, image_root)
     prompt_info = read_json(prompt_info_json) if prompt_info_json else {}
@@ -151,6 +156,7 @@ def run_episode_generation(
     previous_image_path: Optional[Path] = None
     records: List[JsonObject] = []
     system_instruction = prompt_catalog.get("generation_system")
+    rendered_prompt_dir = get_rendered_prompt_output_dir(output_path) if save_rendered_prompts else None
 
     for request_index, (skill, sample) in enumerate(sampled, start=1):
         subtask_prior = subtask_prior_by_stage.get(skill.stage_idx, {})
@@ -174,6 +180,24 @@ def run_episode_generation(
         image_paths = [sample.image_path]
         if has_previous_image and previous_image_path is not None:
             image_paths = [previous_image_path, sample.image_path]
+
+        rendered_prompt_path: Optional[Path] = None
+        if rendered_prompt_dir is not None:
+            rendered_prompt_path = (
+                rendered_prompt_dir
+                / f"request_{request_index:06d}_stage_{skill.stage_idx:02d}_frame_{sample.frame_number:06d}.json"
+            )
+            write_rendered_prompt(
+                path=rendered_prompt_path,
+                request_index=request_index,
+                skill=skill,
+                sample=sample,
+                previous_image_path=previous_image_path if has_previous_image else None,
+                system_instruction=system_instruction,
+                user_prompt=prompt,
+                completion_guidance=completion_guidance,
+            )
+            print(f"[prompt-saved] {rendered_prompt_path}", flush=True)
 
         print(
             "[generate] "
@@ -219,6 +243,8 @@ def run_episode_generation(
         }
         if metadata:
             record["google_response_metadata"] = metadata
+        if rendered_prompt_path is not None:
+            record["rendered_prompt_path"] = str(rendered_prompt_path)
         records.append(record)
 
         new_memory = response.get("new_memory")
@@ -234,6 +260,7 @@ def run_episode_generation(
         "task_name": episode.task_name,
         "prompt_info_json": str(prompt_info_json) if prompt_info_json else "",
         "task_prior_json": str(prompt_info_json) if prompt_info_json else "",
+        "rendered_prompt_dir": str(rendered_prompt_dir) if rendered_prompt_dir is not None else "",
         "frame_selection": f"valid_duration_stride_{frame_stride}",
         "processed_count": len(records),
         "used_count": len(records),
@@ -252,6 +279,38 @@ def normalize_model_response(response: JsonObject) -> JsonObject:
         if normalized == "no_for_sure":
             response["is_subtask_completed"] = False
     return response
+
+
+def get_rendered_prompt_output_dir(output_path: Path) -> Path:
+    return output_path.parent / f"{output_path.stem}_prompts"
+
+
+def write_rendered_prompt(
+    *,
+    path: Path,
+    request_index: int,
+    skill: SkillSpec,
+    sample: SampledFrame,
+    previous_image_path: Optional[Path],
+    system_instruction: str,
+    user_prompt: str,
+    completion_guidance: str,
+) -> None:
+    payload: JsonObject = {
+        "request_index": request_index,
+        "skill_idx": skill.skill_idx,
+        "stage_idx": skill.stage_idx,
+        "frame_number": sample.frame_number,
+        "image_path": str(sample.image_path),
+        "previous_image_path": str(previous_image_path) if previous_image_path is not None else "",
+        "skill_description": skill.skill_description,
+        "object_id": skill.object_id,
+        "manuipation_object_id": skill.manuipation_object_id,
+        "system_instruction": system_instruction,
+        "user_prompt": user_prompt,
+        "completion_guidance": completion_guidance,
+    }
+    write_json(path, payload)
 
 
 def build_subtask_prior_index(task_prior: JsonObject) -> Dict[int, JsonObject]:

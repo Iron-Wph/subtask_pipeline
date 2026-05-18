@@ -285,7 +285,31 @@ python generate_dataset.py \
   --image-root data/images/episode_0001 \
   --autolabel-json outputs/episode_0001/prior/autolabel_prompt_info.json \
   --output outputs/episode_0001/generation \
-  --frame-stride 80
+  --frame-stride 80 \
+  --save-rendered-prompts
+```
+
+如果打开 `--save-rendered-prompts`，程序会为每一次大规模生成请求额外保存一份真实渲染后的 prompt：
+
+```text
+outputs/episode_0001/generation/
+  episode_0001_generation.json
+  episode_0001_generation_prompts/
+    request_000001_stage_00_frame_000080.json
+```
+
+每个 prompt JSON 包含：
+
+```json
+{
+  "system_instruction": "...",
+  "user_prompt": "...",
+  "completion_guidance": "...",
+  "image_path": "...",
+  "previous_image_path": "...",
+  "stage_idx": 0,
+  "frame_number": 80
+}
 ```
 
 也可以用主 CLI：
@@ -296,7 +320,8 @@ python api_subtask_auto_label.py generate \
   --image-root data/images/episode_0001 \
   --prompt-info-json outputs/episode_0001/prior/autolabel_prompt_info.json \
   --output outputs/episode_0001/generation \
-  --frame-stride 80
+  --frame-stride 80 \
+  --save-rendered-prompts
 ```
 
 输出仍采用当前 `model_response` 结构：
@@ -354,7 +379,8 @@ python api_subtask_auto_label.py run-all \
   --output-dir outputs/episode_0001 \
   --sample-k 10 \
   --prior-min-items 4 \
-  --frame-stride 80
+  --frame-stride 80 \
+  --save-rendered-prompts
 ```
 
 ## Prompt 配置
@@ -392,4 +418,5 @@ generation_user
 --episode-offset            批量模式跳过前 N 个 episode
 --episode-limit             批量模式最多处理 N 个 episode
 --resume                    跳过已有完整输出
+--save-rendered-prompts     保存每次 generation 请求真实发送给模型的 system/user prompt
 ```

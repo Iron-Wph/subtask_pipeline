@@ -35,6 +35,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--frame-stride", type=int, default=80)
     parser.add_argument("--request-delay", type=float, default=0.0)
     parser.add_argument("--include-previous-image", action="store_true")
+    parser.add_argument(
+        "--save-rendered-prompts",
+        action="store_true",
+        help="Save the full rendered system/user prompt for every generation request.",
+    )
     parser.add_argument("--episode-limit", type=int)
     parser.add_argument("--episode-offset", type=int, default=0)
     parser.add_argument("--resume", action="store_true")
@@ -87,5 +92,6 @@ def main(argv: Optional[list[str]] = None) -> int:
         episode_limit=args.episode_limit,
         episode_offset=args.episode_offset,
         resume=args.resume,
+        save_rendered_prompts=args.save_rendered_prompts,
     )
     return 0
