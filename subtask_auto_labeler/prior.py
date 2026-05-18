@@ -10,6 +10,7 @@ from .prompts import PromptCatalog
 
 SUBTASK_FRAME_KEYS = {
     "frame_reasoning",
+    "frame_state_memory",
     "subtask_name",
     "target_visual_description",
     "completion_conditions",
@@ -210,6 +211,11 @@ def summarize_subtask_prior(
     ambiguous_cases = merge_string_lists(
         record["model_response"].get("ambiguous_cases", []) for record in frame_results
     )
+    frame_state_memories = [
+        record["model_response"].get("frame_state_memory", {})
+        for record in frame_results
+        if isinstance(record["model_response"].get("frame_state_memory"), dict)
+    ]
     subtask_name = first_text_value(
         record["model_response"].get("subtask_name") for record in frame_results
     )
@@ -224,6 +230,7 @@ def summarize_subtask_prior(
             "previous_image_path": record.get("previous_image_path", ""),
             "status_hint": record["model_response"].get("status_hint", ""),
             "frame_reasoning": record["model_response"].get("frame_reasoning", ""),
+            "frame_state_memory": record["model_response"].get("frame_state_memory", {}),
         }
         for record in frame_results
     ]
@@ -247,6 +254,7 @@ def summarize_subtask_prior(
         "negative_conditions": negative_conditions,
         "common_false_positives": common_false_positives,
         "ambiguous_cases": ambiguous_cases,
+        "frame_state_memories": frame_state_memories,
         "sampled_frame_analysis": timeline,
         "raw_frame_requests": frame_results,
     }

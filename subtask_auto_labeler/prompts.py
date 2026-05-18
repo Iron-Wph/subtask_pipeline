@@ -16,7 +16,7 @@ class PromptCatalog:
         value = self._data.get(name)
         if not isinstance(value, str):
             raise KeyError(f"Prompt config is missing string prompt: {name}")
-        return value
+        return value.replace("\\n", "\n")
 
     def render(self, name: str, values: Dict[str, Any]) -> str:
         text = self.get(name)

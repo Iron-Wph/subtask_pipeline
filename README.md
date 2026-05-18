@@ -79,6 +79,8 @@ manuipation_object_id 或 manipulating_object_id
 
 最终每个 skill 的列表字段默认至少生成 4 条非重复描述，可通过 `--prior-min-items` 调整。列表字段包括 `completion_conditions`、`required_visual_evidence`、`state_transition_evidence`、`negative_conditions`、`common_false_positives` 和 `ambiguous_cases`。同一字段内会要求覆盖不同角度，例如目标颜色/形状/位置/大小/数量、机器人夹爪接触或撤离、前后状态变化、遮挡、反光、运动模糊和视角歧义。
 
+prior 阶段不是直接生成最终逐帧标签，但每个采样帧会保存轻量状态记忆：`frame_reasoning` 和 `frame_state_memory`。其中 `frame_state_memory` 记录目标部件当前状态、机器人与目标部件的空间/接触关系、相对上一采样帧的变化和不确定性。后续汇总时会用这些帧级状态信息生成更稳定的完成条件。
+
 ```bash
 python api_subtask_auto_label.py prior \
   --annotation-json data/annotations/episode_0001.json \
@@ -154,6 +156,7 @@ ambiguous_cases              应保守标为 no_for_sure 的情况
 5. 对 pick / place 等操作动作，必须写清楚对象支撑关系、释放关系或目标位置关系。
 6. 负例和误判条件要具体到可见证据，例如遮挡、反光、颜色不确定、只接触但未移动。
 7. 不要只写 `visible state change`、`indicator turns on`、`button is pressed` 这类泛化短语；应写清楚同一个目标部件的颜色、形状、位置和前后状态，例如 “the same small circular power button changes from red to green”。
+8. 不要单独使用 `indicator`、`button`、`it` 这类指代不明的词；每条条件都应写完整目标对象和目标部件，例如 “the radio small circular power button on the top control area”。
 ```
 
 例如 `press the radio button` 这类 skill，好的描述应该包含：
@@ -171,14 +174,14 @@ ambiguous_cases              应保守标为 no_for_sure 的情况
     "count": "one target button"
   },
   "completion_conditions": [
-    "the robot has pressed the radio's small circular power button and the same button/indicator is visibly green",
+    "the robot has pressed the radio's small circular power button and the same small circular power button is visibly green",
     "the small round power button on the radio's top control area is in the completed green state after robot contact",
     "the radio's one target power button is no longer red and is clearly green in the robot's head-camera view",
     "the robot's left gripper can retract while the same small circular button remains green"
   ],
   "required_visual_evidence": [
     "the small round power button on the radio's top control area is clearly visible",
-    "the target button/indicator is green after the press",
+    "the radio small circular power button on the top control area is green after the press",
     "the visible green mark belongs to the same dot-sized circular button rather than another part of the radio",
     "only one target power button is being evaluated on the radio's top control area"
   ],
@@ -210,6 +213,8 @@ ambiguous_cases              应保守标为 no_for_sure 的情况
 ```
 
 ## 2. 通用数据集生成
+
+generation 阶段才是逐帧结构化标注，和旧脚本 `api_gemini_without_wrist.py` 一样，每一帧都会输出 `reasoning`、`new_memory`、`current_skill_status`、`visible_transition` 和 `is_subtask_completed`。区别是现在不再把特定任务规则写死在脚本里，而是读取 prior 阶段生成的 `autolabel_prompt_info.json` 作为任务特定判据。
 
 推荐使用独立入口 `generate_dataset.py`：
 
