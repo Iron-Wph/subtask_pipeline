@@ -21,6 +21,25 @@ MODEL_RESPONSE_KEYS = {
     "visible_transition",
     "is_subtask_completed",
 }
+GLOBAL_PRIOR_KEYS = (
+    "task_summary",
+    "global_completion_order",
+    "global_visual_adjustments",
+    "cross_subtask_false_positive_risks",
+)
+SKILL_PRIOR_KEYS = (
+    "stage_idx",
+    "skill_idx",
+    "skill_description",
+    "subtask_name",
+    "target_visual_description",
+    "completion_conditions",
+    "required_visual_evidence",
+    "state_transition_evidence",
+    "negative_conditions",
+    "common_false_positives",
+    "ambiguous_cases",
+)
 
 
 def run_generation_pipeline(
@@ -125,6 +144,7 @@ def run_episode_generation(
 ) -> JsonObject:
     episode = load_episode(annotation_json, image_root)
     prompt_info = read_json(prompt_info_json) if prompt_info_json else {}
+    global_prompt_info = build_global_prompt_info(prompt_info)
     subtask_prior_by_stage = build_subtask_prior_index(prompt_info)
     sampled = iter_stride_frames(episode.annotation, image_root, frame_stride)
     old_memory = ""
@@ -144,8 +164,8 @@ def run_episode_generation(
                 "manuipation_object_id": skill.manuipation_object_id,
                 "frame_duration": list(skill.frame_duration),
                 "frame_number": sample.frame_number,
-                "task_prior_json": json.dumps(prompt_info, ensure_ascii=False, indent=2),
-                "prompt_info_json": json.dumps(prompt_info, ensure_ascii=False, indent=2),
+                "task_prior_json": json.dumps(global_prompt_info, ensure_ascii=False, indent=2),
+                "prompt_info_json": json.dumps(global_prompt_info, ensure_ascii=False, indent=2),
                 "subtask_prior_json": json.dumps(subtask_prior, ensure_ascii=False, indent=2),
             },
         )
@@ -243,7 +263,7 @@ def build_subtask_prior_index(task_prior: JsonObject) -> Dict[int, JsonObject]:
                 continue
             stage_idx = item.get("stage_idx")
             if isinstance(stage_idx, int):
-                child_index[stage_idx] = item
+                child_index[stage_idx] = compact_skill_prior(item)
                 skill_idx = item.get("skill_idx")
                 if isinstance(skill_idx, int):
                     child_stage_by_skill_idx[skill_idx] = stage_idx
@@ -264,7 +284,7 @@ def build_subtask_prior_index(task_prior: JsonObject) -> Dict[int, JsonObject]:
                     if isinstance(skill_idx, int):
                         stage_idx = child_stage_by_skill_idx.get(skill_idx, skill_idx)
                 if isinstance(stage_idx, int):
-                    adjusted_index[stage_idx] = item
+                    adjusted_index[stage_idx] = compact_skill_prior(item)
 
     merged: Dict[int, JsonObject] = {}
     for stage_idx, child_prior in child_index.items():
@@ -274,6 +294,33 @@ def build_subtask_prior_index(task_prior: JsonObject) -> Dict[int, JsonObject]:
     for stage_idx, adjusted_prior in adjusted_index.items():
         merged.setdefault(stage_idx, {})["parent_adjusted_prior"] = adjusted_prior
     return merged
+
+
+def build_global_prompt_info(task_prior: JsonObject) -> JsonObject:
+    model_response = task_prior.get("model_response")
+    source = model_response if isinstance(model_response, dict) else task_prior
+    compact: JsonObject = {}
+    for key in ("task_name", "prior_min_items"):
+        if key in task_prior:
+            compact[key] = task_prior[key]
+    for key in GLOBAL_PRIOR_KEYS:
+        value = source.get(key)
+        if has_prompt_value(value):
+            compact[key] = value
+    return compact
+
+
+def compact_skill_prior(skill_prior: JsonObject) -> JsonObject:
+    compact: JsonObject = {}
+    for key in SKILL_PRIOR_KEYS:
+        value = skill_prior.get(key)
+        if has_prompt_value(value):
+            compact[key] = value
+    return compact
+
+
+def has_prompt_value(value: object) -> bool:
+    return value not in (None, "", [], {})
 
 
 def is_complete_generation_output(output: object) -> bool:

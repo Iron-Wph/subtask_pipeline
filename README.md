@@ -216,6 +216,33 @@ ambiguous_cases              应保守标为 no_for_sure 的情况
 
 generation 阶段才是逐帧结构化标注，和旧脚本 `api_gemini_without_wrist.py` 一样，每一帧都会输出 `reasoning`、`new_memory`、`current_skill_status`、`visible_transition` 和 `is_subtask_completed`。区别是现在不再把特定任务规则写死在脚本里，而是读取 prior 阶段生成的 `autolabel_prompt_info.json` 作为任务特定判据。
 
+generation 不会把完整 `autolabel_prompt_info.json` 直接塞进 Gemini 上下文。程序会先抽取精简字段：
+
+```text
+global prior:
+  task_name
+  prior_min_items
+  task_summary
+  global_completion_order
+  global_visual_adjustments
+  cross_subtask_false_positive_risks
+
+current skill prior:
+  child_prior
+    stage_idx / skill_idx / skill_description / subtask_name
+    target_visual_description
+    completion_conditions
+    required_visual_evidence
+    state_transition_evidence
+    negative_conditions
+    common_false_positives
+    ambiguous_cases
+  parent_adjusted_prior
+    同上，但来自父 agent 的全局调整结果
+```
+
+`raw_frame_requests`、采样帧分析日志、Gemini metadata 和完整子任务列表不会进入每帧请求。旧脚本里写死的任务规则被拆成了两部分：通用判断逻辑保存在 `generation_user` prompt 中，任务特定视觉判据由上述精简 JSON 字段注入。
+
 推荐使用独立入口 `generate_dataset.py`：
 
 ```bash
