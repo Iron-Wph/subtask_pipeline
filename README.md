@@ -157,6 +157,7 @@ ambiguous_cases              应保守标为 no_for_sure 的情况
 6. 负例和误判条件要具体到可见证据，例如遮挡、反光、颜色不确定、只接触但未移动。
 7. 不要只写 `visible state change`、`indicator turns on`、`button is pressed` 这类泛化短语；应写清楚同一个目标部件的颜色、形状、位置和前后状态，例如 “the same small circular power button changes from red to green”。
 8. 不要单独使用 `indicator`、`button`、`it` 这类指代不明的词；每条条件都应写完整目标对象和目标部件，例如 “the radio small circular power button on the top control area”。
+9. `target_visual_description` 是后续字段的一致性来源。若其中写了颜色前后状态，例如 `red before completion, green after completion`，则完成条件必须写同一目标部件的最终颜色，状态转移必须写同一目标部件的前后颜色变化；不能再引入未确认的第二个灯、孔、按钮或开关。
 ```
 
 例如 `press the radio button` 这类 skill，好的描述应该包含：
@@ -168,7 +169,7 @@ ambiguous_cases              应保守标为 no_for_sure 的情况
     "target_object": "radio",
     "target_part": "small circular power button on the top control area",
     "color": "red before completion, green after completion",
-    "shape": "small round indicator/button",
+    "shape": "small round power button",
     "position": "on the top control area of the radio",
     "size": "small dot-sized button relative to the radio body",
     "count": "one target button"
@@ -187,24 +188,24 @@ ambiguous_cases              应保守标为 no_for_sure 的情况
   ],
   "state_transition_evidence": [
     "the same small circular power button changes from red to green between observations",
-    "the target button is red before robot pressure and green after the press",
-    "the robot gripper moves away from the radio while the small circular indicator remains green",
+    "the radio small circular power button on the top control area is red before robot pressure and green after the press",
+    "the robot gripper moves away from the radio while the radio small circular power button on the top control area remains green",
     "the color change occurs on the top control area's one target button, not on a background reflection"
   ],
   "negative_conditions": [
     "the small circular power button remains red",
-    "the robot gripper is near or touching the button but the target button/indicator is not green",
+    "the robot gripper is near or touching the radio small circular power button on the top control area but that same target button is not green",
     "the green color is visible on another radio part but the target circular power button is still red or hidden",
     "the target button is fully occluded, so the completed green state cannot be verified"
   ],
   "common_false_positives": [
-    "the button is occluded by the robot gripper",
-    "a reflection or unrelated colored object looks like the target indicator",
+    "the radio small circular power button on the top control area is occluded by the robot gripper",
+    "a reflection or unrelated colored object looks like the target power button turning green",
     "the robot gripper presses the radio body near the control area but misses the small circular power button",
     "the target button appears darker from shadow but has not visibly changed from red to green"
   ],
   "ambiguous_cases": [
-    "the target indicator is partly hidden, overexposed, or color-ambiguous",
+    "the radio small circular power button on the top control area is partly hidden, overexposed, or color-ambiguous",
     "motion blur around the gripper or radio makes the small circular button boundary unclear",
     "the robot's head-camera view shows the radio at an angle where the top control area is not fully visible",
     "the gripper covers the button at the moment when the red-to-green transition would need to be checked"

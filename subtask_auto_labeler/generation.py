@@ -154,20 +154,21 @@ def run_episode_generation(
 
     for request_index, (skill, sample) in enumerate(sampled, start=1):
         subtask_prior = subtask_prior_by_stage.get(skill.stage_idx, {})
-        prompt = prompt_catalog.render(
-            "generation_user",
-            {
-                "task_name": episode.task_name,
-                "old_memory": old_memory,
-                "skill_description": skill.skill_description,
-                "object_id": skill.object_id,
-                "manuipation_object_id": skill.manuipation_object_id,
-                "frame_duration": list(skill.frame_duration),
-                "frame_number": sample.frame_number,
-                "task_prior_json": json.dumps(global_prompt_info, ensure_ascii=False, indent=2),
-                "prompt_info_json": json.dumps(global_prompt_info, ensure_ascii=False, indent=2),
-                "subtask_prior_json": json.dumps(subtask_prior, ensure_ascii=False, indent=2),
-            },
+        prompt_values = {
+            "task_name": episode.task_name,
+            "old_memory": old_memory,
+            "skill_description": skill.skill_description,
+            "object_id": skill.object_id,
+            "manuipation_object_id": skill.manuipation_object_id,
+            "frame_duration": list(skill.frame_duration),
+            "frame_number": sample.frame_number,
+            "task_prior_json": json.dumps(global_prompt_info, ensure_ascii=False, indent=2),
+            "prompt_info_json": json.dumps(global_prompt_info, ensure_ascii=False, indent=2),
+            "subtask_prior_json": json.dumps(subtask_prior, ensure_ascii=False, indent=2),
+        }
+        prompt = append_optional_prompt(
+            prompt_catalog.render("generation_user", prompt_values),
+            prompt_catalog.render_optional("target_consistency_rules", prompt_values),
         )
         image_paths = [sample.image_path]
         if include_previous_image and previous_image_path is not None:
@@ -321,6 +322,12 @@ def compact_skill_prior(skill_prior: JsonObject) -> JsonObject:
 
 def has_prompt_value(value: object) -> bool:
     return value not in (None, "", [], {})
+
+
+def append_optional_prompt(prompt: str, optional_prompt: str) -> str:
+    if not optional_prompt.strip():
+        return prompt
+    return f"{prompt}\n\n{optional_prompt.strip()}"
 
 
 def is_complete_generation_output(output: object) -> bool:

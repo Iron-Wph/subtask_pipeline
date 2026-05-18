@@ -24,3 +24,14 @@ class PromptCatalog:
         for key, value in values.items():
             rendered = rendered.replace("{" + key + "}", value if isinstance(value, str) else str(value))
         return rendered
+
+    def render_optional(self, name: str, values: Dict[str, Any]) -> str:
+        value = self._data.get(name)
+        if value is None:
+            return ""
+        if not isinstance(value, str):
+            raise KeyError(f"Prompt config must define string prompt when present: {name}")
+        rendered = value.replace("\\n", "\n")
+        for key, item in values.items():
+            rendered = rendered.replace("{" + key + "}", item if isinstance(item, str) else str(item))
+        return rendered

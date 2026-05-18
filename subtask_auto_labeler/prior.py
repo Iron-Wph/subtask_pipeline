@@ -125,22 +125,23 @@ def run_subtask_prior(
             if previous_record is not None
             else "No previous sampled frame for this skill."
         )
-        prompt = prompt_catalog.render(
-            "subtask_prior_user",
-            {
-                "task_name": episode.task_name,
-                "stage_idx": skill.stage_idx,
-                "skill_idx": skill.skill_idx,
-                "skill_description": skill.skill_description,
-                "object_id": skill.object_id,
-                "manuipation_object_id": skill.manuipation_object_id,
-                "frame_duration": list(skill.frame_duration),
-                "frame_number": sample.frame_number,
-                "sample_index": request_index,
-                "sample_count": len(samples),
-                "prior_min_items": prior_min_items,
-                "previous_frame_context": previous_context,
-            },
+        prompt_values = {
+            "task_name": episode.task_name,
+            "stage_idx": skill.stage_idx,
+            "skill_idx": skill.skill_idx,
+            "skill_description": skill.skill_description,
+            "object_id": skill.object_id,
+            "manuipation_object_id": skill.manuipation_object_id,
+            "frame_duration": list(skill.frame_duration),
+            "frame_number": sample.frame_number,
+            "sample_index": request_index,
+            "sample_count": len(samples),
+            "prior_min_items": prior_min_items,
+            "previous_frame_context": previous_context,
+        }
+        prompt = append_optional_prompt(
+            prompt_catalog.render("subtask_prior_user", prompt_values),
+            prompt_catalog.render_optional("target_consistency_rules", prompt_values),
         )
         image_paths = [sample.image_path]
         if previous_record is not None:
@@ -270,19 +271,20 @@ def consolidate_subtask_prior(
     prior_min_items: int,
 ) -> JsonObject:
     system_instruction = prompt_catalog.get("subtask_prior_summary_system")
-    prompt = prompt_catalog.render(
-        "subtask_prior_summary_user",
-        {
-            "task_name": episode.task_name,
-            "stage_idx": skill.stage_idx,
-            "skill_idx": skill.skill_idx,
-            "skill_description": skill.skill_description,
-            "object_id": skill.object_id,
-            "manuipation_object_id": skill.manuipation_object_id,
-            "frame_duration": list(skill.frame_duration),
-            "prior_min_items": prior_min_items,
-            "preliminary_prior_json": json.dumps(preliminary_prior, ensure_ascii=False, indent=2),
-        },
+    prompt_values = {
+        "task_name": episode.task_name,
+        "stage_idx": skill.stage_idx,
+        "skill_idx": skill.skill_idx,
+        "skill_description": skill.skill_description,
+        "object_id": skill.object_id,
+        "manuipation_object_id": skill.manuipation_object_id,
+        "frame_duration": list(skill.frame_duration),
+        "prior_min_items": prior_min_items,
+        "preliminary_prior_json": json.dumps(preliminary_prior, ensure_ascii=False, indent=2),
+    }
+    prompt = append_optional_prompt(
+        prompt_catalog.render("subtask_prior_summary_user", prompt_values),
+        prompt_catalog.render_optional("target_consistency_rules", prompt_values),
     )
     print(
         "[prior-subtask-summary] "
@@ -314,15 +316,16 @@ def run_parent_prior(
     prior_min_items: int,
 ) -> JsonObject:
     system_instruction = prompt_catalog.get("parent_prior_system")
-    prompt = prompt_catalog.render(
-        "parent_prior_user",
-        {
-            "task_name": episode.task_name,
-            "annotation_json": str(episode.annotation_json),
-            "image_root": str(episode.image_root),
-            "prior_min_items": prior_min_items,
-            "subtask_priors_json": json.dumps(subtask_results, ensure_ascii=False, indent=2),
-        },
+    prompt_values = {
+        "task_name": episode.task_name,
+        "annotation_json": str(episode.annotation_json),
+        "image_root": str(episode.image_root),
+        "prior_min_items": prior_min_items,
+        "subtask_priors_json": json.dumps(subtask_results, ensure_ascii=False, indent=2),
+    }
+    prompt = append_optional_prompt(
+        prompt_catalog.render("parent_prior_user", prompt_values),
+        prompt_catalog.render_optional("target_consistency_rules", prompt_values),
     )
     print("[prior-parent] adjusting task-level prior", flush=True)
     response, metadata = gemini_client.generate_json(
@@ -364,6 +367,12 @@ def merge_string_lists(groups) -> List[str]:
                 merged.append(text)
                 seen.add(key)
     return merged
+
+
+def append_optional_prompt(prompt: str, optional_prompt: str) -> str:
+    if not optional_prompt.strip():
+        return prompt
+    return f"{prompt}\n\n{optional_prompt.strip()}"
 
 
 def first_text_value(values) -> str:
