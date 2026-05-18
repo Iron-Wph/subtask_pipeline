@@ -154,6 +154,8 @@ def run_episode_generation(
 
     for request_index, (skill, sample) in enumerate(sampled, start=1):
         subtask_prior = subtask_prior_by_stage.get(skill.stage_idx, {})
+        has_previous_image = include_previous_image and previous_image_path is not None
+        completion_guidance = build_completion_guidance(global_prompt_info, subtask_prior)
         prompt_values = {
             "task_name": episode.task_name,
             "old_memory": old_memory,
@@ -162,16 +164,15 @@ def run_episode_generation(
             "manuipation_object_id": skill.manuipation_object_id,
             "frame_duration": list(skill.frame_duration),
             "frame_number": sample.frame_number,
-            "task_prior_json": json.dumps(global_prompt_info, ensure_ascii=False, indent=2),
-            "prompt_info_json": json.dumps(global_prompt_info, ensure_ascii=False, indent=2),
-            "subtask_prior_json": json.dumps(subtask_prior, ensure_ascii=False, indent=2),
+            "image_block": build_image_block(has_previous_image),
+            "completion_guidance": completion_guidance,
         }
         prompt = append_optional_prompt(
             prompt_catalog.render("generation_user", prompt_values),
             prompt_catalog.render_optional("target_consistency_rules", prompt_values),
         )
         image_paths = [sample.image_path]
-        if include_previous_image and previous_image_path is not None:
+        if has_previous_image and previous_image_path is not None:
             image_paths = [previous_image_path, sample.image_path]
 
         print(
@@ -195,8 +196,9 @@ def run_episode_generation(
             "manuipation_object_id": skill.manuipation_object_id,
             "frame_number": sample.frame_number,
             "frame_duration": list(skill.frame_duration),
+            "completion_guidance": completion_guidance,
         }
-        if include_previous_image and previous_image_path is not None:
+        if has_previous_image and previous_image_path is not None:
             request_input["previous_image_path"] = str(previous_image_path)
         record: JsonObject = {
             "skill_idx": skill.skill_idx,
@@ -322,6 +324,118 @@ def compact_skill_prior(skill_prior: JsonObject) -> JsonObject:
 
 def has_prompt_value(value: object) -> bool:
     return value not in (None, "", [], {})
+
+
+def build_image_block(has_previous_image: bool) -> str:
+    if has_previous_image:
+        return (
+            "Images:\n"
+            "- Previous observation image: <previous_image>\n"
+            "- Current observation image: <current_image>\n\n"
+            "Use the previous observation image only as temporal context. "
+            "The current observation image is the one to label."
+        )
+    return "Image:\n<current_image>"
+
+
+def build_completion_guidance(global_prompt_info: JsonObject, subtask_prior: JsonObject) -> str:
+    lines: List[str] = []
+    if global_prompt_info:
+        lines.append("Task-level guidance:")
+        append_named_value(lines, "Task summary", global_prompt_info.get("task_summary"))
+        append_named_items(lines, "Expected completion order", global_prompt_info.get("global_completion_order"))
+        append_named_items(lines, "Global visual adjustments", global_prompt_info.get("global_visual_adjustments"))
+        append_named_items(
+            lines,
+            "Cross-subtask false-positive risks",
+            global_prompt_info.get("cross_subtask_false_positive_risks"),
+        )
+
+    parent_prior = subtask_prior.get("parent_adjusted_prior")
+    child_prior = subtask_prior.get("child_prior")
+    primary_prior = parent_prior if isinstance(parent_prior, dict) else child_prior
+    secondary_prior = child_prior if isinstance(parent_prior, dict) and isinstance(child_prior, dict) else None
+
+    if isinstance(primary_prior, dict) and primary_prior:
+        if lines:
+            lines.append("")
+        lines.append("Current-skill visible postconditions:")
+        append_skill_guidance(lines, primary_prior)
+    else:
+        if lines:
+            lines.append("")
+        lines.append("Current-skill visible postconditions:")
+        lines.append("- No autolabel prior is available for this skill; use the generic visible postcondition rules.")
+
+    if isinstance(secondary_prior, dict) and secondary_prior:
+        child_detail_lines: List[str] = []
+        append_named_items(child_detail_lines, "Child-agent completion details", secondary_prior.get("completion_conditions"))
+        append_named_items(child_detail_lines, "Child-agent required visual evidence", secondary_prior.get("required_visual_evidence"))
+        append_named_items(child_detail_lines, "Child-agent state transitions", secondary_prior.get("state_transition_evidence"))
+        if child_detail_lines:
+            lines.append("")
+            lines.append("Additional child-agent visual details to preserve when they do not conflict with parent guidance:")
+            lines.extend(child_detail_lines)
+
+    lines.append("")
+    lines.append(
+        "Use these task-specific postconditions in place of hard-coded task rules. "
+        "They are guidance, not visual evidence; the current image still decides the label."
+    )
+    return "\n".join(lines)
+
+
+def append_skill_guidance(lines: List[str], skill_prior: JsonObject) -> None:
+    append_named_value(lines, "Subtask", skill_prior.get("subtask_name"))
+    target_description = describe_target(skill_prior.get("target_visual_description"))
+    append_named_value(lines, "Target", target_description)
+    append_named_items(lines, "Mark completed only when", skill_prior.get("completion_conditions"))
+    append_named_items(lines, "Required visible evidence", skill_prior.get("required_visual_evidence"))
+    append_named_items(lines, "Visible state transitions to look for", skill_prior.get("state_transition_evidence"))
+    append_named_items(lines, "Keep not completed when", skill_prior.get("negative_conditions"))
+    append_named_items(lines, "Do not count these false positives as completed", skill_prior.get("common_false_positives"))
+    append_named_items(lines, "Use no_for_sure for ambiguous cases", skill_prior.get("ambiguous_cases"))
+
+
+def describe_target(value: object) -> str:
+    if not isinstance(value, dict):
+        return ""
+    pieces = []
+    for key, label in (
+        ("target_object", "object"),
+        ("target_part", "part"),
+        ("color", "color/state"),
+        ("shape", "shape"),
+        ("position", "position"),
+        ("size", "size"),
+        ("count", "count"),
+    ):
+        field_value = value.get(key)
+        if has_prompt_value(field_value):
+            pieces.append(f"{label}: {field_value}")
+    return "; ".join(str(piece) for piece in pieces)
+
+
+def append_named_value(lines: List[str], label: str, value: object) -> None:
+    if has_prompt_value(value):
+        lines.append(f"- {label}: {value}")
+
+
+def append_named_items(lines: List[str], label: str, value: object) -> None:
+    items = normalize_guidance_items(value)
+    if not items:
+        return
+    lines.append(f"- {label}:")
+    for item in items:
+        lines.append(f"  - {item}")
+
+
+def normalize_guidance_items(value: object) -> List[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return []
 
 
 def append_optional_prompt(prompt: str, optional_prompt: str) -> str:

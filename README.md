@@ -217,7 +217,9 @@ ambiguous_cases              应保守标为 no_for_sure 的情况
 
 generation 阶段才是逐帧结构化标注，和旧脚本 `api_gemini_without_wrist.py` 一样，每一帧都会输出 `reasoning`、`new_memory`、`current_skill_status`、`visible_transition` 和 `is_subtask_completed`。区别是现在不再把特定任务规则写死在脚本里，而是读取 prior 阶段生成的 `autolabel_prompt_info.json` 作为任务特定判据。
 
-generation 不会把完整 `autolabel_prompt_info.json` 直接塞进 Gemini 上下文。程序会先抽取精简字段：
+generation 不会把完整 `autolabel_prompt_info.json` 直接塞进 Gemini 上下文，也不会把精简 JSON 原样传给模型。程序会先抽取字段，再整理成自然语言的第 16 点 `Use these task-specific visible postconditions as guidance`，用于替换旧 `api_gemini_without_wrist.py` 中写死的任务特定规则。
+
+内部抽取字段包括：
 
 ```text
 global prior:
@@ -242,7 +244,38 @@ current skill prior:
     同上，但来自父 agent 的全局调整结果
 ```
 
-`raw_frame_requests`、采样帧分析日志、Gemini metadata 和完整子任务列表不会进入每帧请求。旧脚本里写死的任务规则被拆成了两部分：通用判断逻辑保存在 `generation_user` prompt 中，任务特定视觉判据由上述精简 JSON 字段注入。
+`raw_frame_requests`、采样帧分析日志、Gemini metadata 和完整子任务列表不会进入每帧请求。旧脚本里写死的任务规则被拆成了两部分：
+
+```text
+通用判断逻辑:
+  保留在 generation_user prompt 的第 1-15 点和第 17-19 点。
+
+任务特定视觉判据:
+  由 prior 阶段生成，generation 阶段抽取后格式化为自然语言，填入第 16 点。
+```
+
+第 16 点示例：
+
+```text
+16. Use these task-specific visible postconditions as guidance.
+
+Task-level guidance:
+- Task summary: the robot turns on the red radio by pressing its central circular button.
+- Global visual adjustments:
+  - Judge completion from the visible color of the same target button, not from gripper contact alone.
+
+Current-skill visible postconditions:
+- Subtask: press the central circular button on the red radio
+- Target: object: red radio; part: central circular button on the front panel; color/state: red before completion, green after completion; shape: circular; count: one
+- Mark completed only when:
+  - the central circular button on the front panel of the red radio is visibly green after the press
+- Required visible evidence:
+  - the same central circular button is visible and green
+- Visible state transitions to look for:
+  - the central circular button on the red radio changes from red to green
+- Keep not completed when:
+  - the central circular button remains red
+```
 
 推荐使用独立入口 `generate_dataset.py`：
 
