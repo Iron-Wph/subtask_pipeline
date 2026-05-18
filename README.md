@@ -121,15 +121,16 @@ outputs/episode_0001/prior/
   "state_transition_evidence": ["..."],
   "negative_conditions": ["..."],
   "common_false_positives": ["..."],
-  "ambiguous_cases": ["..."]
+  "ambiguous_cases": ["..."],
+  "generation_prompt_guidance": "natural-language Rule 16 guidance for this skill"
 }
 ```
 
-这些字段是后续数据集生成唯一的数据特定规则来源。`memory` 更新格式、输出 JSON 格式、主体称谓等通用规则由 `generate_dataset.py` 的通用 prompt 固定提供，不写入每个 skill 的 prior JSON。
+这些结构化字段用于保存可见判据，`generation_prompt_guidance` 是面向大规模生成阶段的自然语言第 16 条判据。它不是把 key/value 原样贴给模型，而是由子 agent 汇总采样帧后生成、再由父 agent 结合全局任务重新改写的自然规则块。`memory` 更新格式、输出 JSON 格式、主体称谓等通用规则仍由 `generate_dataset.py` 的通用 prompt 固定提供。
 
 ## 子任务描述应该包含什么
 
-为了把 `api_gemini_without_wrist.py` 这类脚本改成通用于各个任务的数据生成程序，子任务提示信息应该只描述数据本身的可见判据，不包含通用写作规则、memory 更新模板或 prompt 规则。
+为了把 `api_gemini_without_wrist.py` 这类脚本改成通用于各个任务的数据生成程序，子任务提示信息应该只描述数据本身的可见判据，不包含通用写作规则或 memory 更新模板；其中 `generation_prompt_guidance` 是例外，它是由这些可见判据改写出来的任务特定自然语言规则，用来替换旧脚本第 16 条里的硬编码任务规则。
 
 建议每个 skill 至少包含：
 
@@ -144,6 +145,7 @@ state_transition_evidence    需要前后对比的视觉变化，例如红灯变
 negative_conditions          明确说明未完成的视觉条件
 common_false_positives       容易误判为完成但证据不足的画面
 ambiguous_cases              应保守标为 no_for_sure 的情况
+generation_prompt_guidance   直接填入 generation 第 16 条的自然语言判据，由子 agent 生成并由父 agent 改写强化
 ```
 
 描述原则：
@@ -209,7 +211,8 @@ ambiguous_cases              应保守标为 no_for_sure 的情况
     "motion blur around the gripper or radio makes the small circular button boundary unclear",
     "the robot's head-camera view shows the radio at an angle where the top control area is not fully visible",
     "the gripper covers the button at the moment when the red-to-green transition would need to be checked"
-  ]
+  ],
+  "generation_prompt_guidance": "For this candidate skill, judge whether the robot has pressed the radio's one small circular power button on the top control area. Treat the skill as completed only when the same target power button is visible and green in the current image; gripper contact alone is not sufficient. Use the previous image only to compare the same button changing from red to green. Keep the skill in progress if the target button remains red, and use no_for_sure if the gripper, glare, blur, or viewpoint makes the target button color unreliable."
 }
 ```
 
@@ -217,7 +220,9 @@ ambiguous_cases              应保守标为 no_for_sure 的情况
 
 generation 阶段才是逐帧结构化标注，和旧脚本 `api_gemini_without_wrist.py` 一样，每一帧都会输出 `reasoning`、`new_memory`、`current_skill_status`、`visible_transition` 和 `is_subtask_completed`。区别是现在不再把特定任务规则写死在脚本里，而是读取 prior 阶段生成的 `autolabel_prompt_info.json` 作为任务特定判据。
 
-generation 不会把完整 `autolabel_prompt_info.json` 直接塞进 Gemini 上下文，也不会把精简 JSON 原样传给模型。程序会先抽取字段，再整理成自然语言的第 16 点 `Use these task-specific visible postconditions as guidance`，用于替换旧 `api_gemini_without_wrist.py` 中写死的任务特定规则。
+generation 不会把完整 `autolabel_prompt_info.json` 直接塞进 Gemini 上下文，也不会把结构化 JSON 的 key/value 原样贴进 prompt。新的流程是：子 agent 汇总每个 skill 时生成 `generation_prompt_guidance`；父 agent 收集所有子任务后，根据全局顺序、共享对象、状态承接和跨子任务误判风险，把这段内容改写成更详细、更自然的第 16 条判据。
+
+generation 阶段优先读取父 agent 的 `generation_prompt_guidance` 并直接填入 `Use these task-specific visible postconditions as guidance`；只有旧 prior 文件缺少该字段时，程序才会用结构化字段生成自然语言回退。
 
 内部抽取字段包括：
 
@@ -240,8 +245,9 @@ current skill prior:
     negative_conditions
     common_false_positives
     ambiguous_cases
+    generation_prompt_guidance
   parent_adjusted_prior
-    同上，但来自父 agent 的全局调整结果
+    同上，但来自父 agent 的全局调整结果，其中 generation_prompt_guidance 是父 agent 改写后的自然语言判据
 ```
 
 `raw_frame_requests`、采样帧分析日志、Gemini metadata 和完整子任务列表不会进入每帧请求。旧脚本里写死的任务规则被拆成了两部分：
@@ -251,7 +257,7 @@ current skill prior:
   保留在 generation_user prompt 的第 1-15 点和第 17-19 点。
 
 任务特定视觉判据:
-  由 prior 阶段生成，generation 阶段抽取后格式化为自然语言，填入第 16 点。
+  优先使用父 agent 改写后的 `generation_prompt_guidance`，直接填入第 16 点；只有旧 prior 文件缺少该字段时，generation 才根据结构化字段生成自然语言回退。
 ```
 
 第 16 点示例：
@@ -259,22 +265,7 @@ current skill prior:
 ```text
 16. Use these task-specific visible postconditions as guidance.
 
-Task-level guidance:
-- Task summary: the robot turns on the red radio by pressing its central circular button.
-- Global visual adjustments:
-  - Judge completion from the visible color of the same target button, not from gripper contact alone.
-
-Current-skill visible postconditions:
-- Subtask: press the central circular button on the red radio
-- Target: object: red radio; part: central circular button on the front panel; color/state: red before completion, green after completion; shape: circular; count: one
-- Mark completed only when:
-  - the central circular button on the front panel of the red radio is visibly green after the press
-- Required visible evidence:
-  - the same central circular button is visible and green
-- Visible state transitions to look for:
-  - the central circular button on the red radio changes from red to green
-- Keep not completed when:
-  - the central circular button remains red
+For this candidate skill, judge whether the robot has pressed the red radio's single small circular power button on the top control area. Treat the press as completed only when the same small circular power button is clearly visible in the current robot head-camera image and its visible color has changed into the completed green state. Robot gripper contact, a finger hovering over the radio, or a pressing motion is not enough by itself; the decisive evidence is the target button's final green state on the radio itself. If a previous image is available, use it only to compare the same target button changing from red before the press to green after the press. Do not use green reflections, wall lights, colored room objects, gripper colors, or other radio marks as substitutes for the radio's one target power button. Keep the skill in progress when the target button remains red or when the robot is touching the radio but the target button has not visibly turned green. Use no_for_sure when the gripper, motion blur, glare, low resolution, or viewpoint hides the target button or makes the red-vs-green color state unreliable.
 ```
 
 推荐使用独立入口 `generate_dataset.py`：

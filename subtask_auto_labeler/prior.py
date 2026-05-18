@@ -30,6 +30,7 @@ SUBTASK_SUMMARY_KEYS = {
     "negative_conditions",
     "common_false_positives",
     "ambiguous_cases",
+    "generation_prompt_guidance",
 }
 PARENT_PRIOR_KEYS = {
     "task_summary",

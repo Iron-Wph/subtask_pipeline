@@ -41,6 +41,7 @@ SKILL_PRIOR_KEYS = (
     "negative_conditions",
     "common_false_positives",
     "ambiguous_cases",
+    "generation_prompt_guidance",
 )
 
 
@@ -399,16 +400,9 @@ def build_image_block(has_previous_image: bool) -> str:
 
 def build_completion_guidance(global_prompt_info: JsonObject, subtask_prior: JsonObject) -> str:
     lines: List[str] = []
-    if global_prompt_info:
-        lines.append("Task-level guidance:")
-        append_named_value(lines, "Task summary", global_prompt_info.get("task_summary"))
-        append_named_items(lines, "Expected completion order", global_prompt_info.get("global_completion_order"))
-        append_named_items(lines, "Global visual adjustments", global_prompt_info.get("global_visual_adjustments"))
-        append_named_items(
-            lines,
-            "Cross-subtask false-positive risks",
-            global_prompt_info.get("cross_subtask_false_positive_risks"),
-        )
+    task_context = render_task_context(global_prompt_info)
+    if task_context:
+        lines.append(task_context)
 
     parent_prior = subtask_prior.get("parent_adjusted_prior")
     child_prior = subtask_prior.get("child_prior")
@@ -418,75 +412,177 @@ def build_completion_guidance(global_prompt_info: JsonObject, subtask_prior: Jso
     if isinstance(primary_prior, dict) and primary_prior:
         if lines:
             lines.append("")
-        lines.append("Current-skill visible postconditions:")
-        append_skill_guidance(lines, primary_prior)
+        natural_guidance = first_text_value(
+            [
+                primary_prior.get("generation_prompt_guidance"),
+                primary_prior.get("completion_guidance"),
+                primary_prior.get("prompt_guidance"),
+            ]
+        )
+        if natural_guidance:
+            lines.append("Task-specific completion and ambiguity rules for the current candidate skill:")
+            lines.append(natural_guidance)
+        else:
+            lines.append(render_skill_prior_as_natural_guidance(primary_prior))
     else:
         if lines:
             lines.append("")
-        lines.append("Current-skill visible postconditions:")
-        lines.append("- No autolabel prior is available for this skill; use the generic visible postcondition rules.")
+        lines.append(
+            "No task-specific prior is available for this candidate skill. Use the generic visible "
+            "postcondition rules above and stay conservative when the decisive visual evidence is missing."
+        )
 
     if isinstance(secondary_prior, dict) and secondary_prior:
-        child_detail_lines: List[str] = []
-        append_named_items(child_detail_lines, "Child-agent completion details", secondary_prior.get("completion_conditions"))
-        append_named_items(child_detail_lines, "Child-agent required visual evidence", secondary_prior.get("required_visual_evidence"))
-        append_named_items(child_detail_lines, "Child-agent state transitions", secondary_prior.get("state_transition_evidence"))
-        if child_detail_lines:
+        child_guidance = first_text_value(
+            [
+                secondary_prior.get("generation_prompt_guidance"),
+                secondary_prior.get("completion_guidance"),
+                secondary_prior.get("prompt_guidance"),
+            ]
+        )
+        if child_guidance:
             lines.append("")
-            lines.append("Additional child-agent visual details to preserve when they do not conflict with parent guidance:")
-            lines.extend(child_detail_lines)
+            lines.append(
+                "Additional child-agent details to preserve when they do not conflict with the parent rules:"
+            )
+            lines.append(child_guidance)
 
     lines.append("")
     lines.append(
-        "Use these task-specific postconditions in place of hard-coded task rules. "
-        "They are guidance, not visual evidence; the current image still decides the label."
+        "These task-specific rules replace the old script's hard-coded task rules. Treat them as judging "
+        "criteria, not as visual evidence; the current image and the previous memory still decide the label."
     )
     return "\n".join(lines)
 
 
-def append_skill_guidance(lines: List[str], skill_prior: JsonObject) -> None:
-    append_named_value(lines, "Subtask", skill_prior.get("subtask_name"))
-    target_description = describe_target(skill_prior.get("target_visual_description"))
-    append_named_value(lines, "Target", target_description)
-    append_named_items(lines, "Mark completed only when", skill_prior.get("completion_conditions"))
-    append_named_items(lines, "Required visible evidence", skill_prior.get("required_visual_evidence"))
-    append_named_items(lines, "Visible state transitions to look for", skill_prior.get("state_transition_evidence"))
-    append_named_items(lines, "Keep not completed when", skill_prior.get("negative_conditions"))
-    append_named_items(lines, "Do not count these false positives as completed", skill_prior.get("common_false_positives"))
-    append_named_items(lines, "Use no_for_sure for ambiguous cases", skill_prior.get("ambiguous_cases"))
+def render_task_context(global_prompt_info: JsonObject) -> str:
+    sentences: List[str] = []
+    task_summary = global_prompt_info.get("task_summary")
+    if has_prompt_value(task_summary):
+        sentences.append(f"At the task level, the episode goal is {strip_terminal_period(str(task_summary))}.")
+
+    completion_order = normalize_guidance_items(global_prompt_info.get("global_completion_order"))
+    if completion_order:
+        sentences.append(
+            "Keep the global order in mind as context: "
+            f"{join_guidance_items(completion_order)}. Do not use the order alone as proof of completion."
+        )
+
+    visual_adjustments = normalize_guidance_items(global_prompt_info.get("global_visual_adjustments"))
+    if visual_adjustments:
+        sentences.append(f"Apply these task-level visual safeguards: {join_guidance_items(visual_adjustments)}.")
+
+    false_positive_risks = normalize_guidance_items(
+        global_prompt_info.get("cross_subtask_false_positive_risks")
+    )
+    if false_positive_risks:
+        sentences.append(
+            "Also guard against cross-skill false positives such as "
+            f"{join_guidance_items(false_positive_risks)}."
+        )
+
+    return "\n".join(sentences)
 
 
-def describe_target(value: object) -> str:
+def render_skill_prior_as_natural_guidance(skill_prior: JsonObject) -> str:
+    sentences: List[str] = []
+    subtask_name = first_text_value([skill_prior.get("subtask_name"), skill_prior.get("skill_description")])
+    target_description = describe_target_naturally(skill_prior.get("target_visual_description"))
+    if subtask_name and target_description:
+        sentences.append(
+            f"For this candidate skill, judge whether the robot is carrying out {subtask_name}. "
+            f"The visual target is {target_description}."
+        )
+    elif subtask_name:
+        sentences.append(f"For this candidate skill, judge whether the robot is carrying out {subtask_name}.")
+    elif target_description:
+        sentences.append(f"For this candidate skill, the visual target is {target_description}.")
+
+    completion_items = normalize_guidance_items(skill_prior.get("completion_conditions"))
+    if completion_items:
+        sentences.append(
+            "Treat the skill as completed only when "
+            f"{join_guidance_items(completion_items)}."
+        )
+
+    evidence_items = normalize_guidance_items(skill_prior.get("required_visual_evidence"))
+    if evidence_items:
+        sentences.append(f"The current image should visibly support this with {join_guidance_items(evidence_items)}.")
+
+    transition_items = normalize_guidance_items(skill_prior.get("state_transition_evidence"))
+    if transition_items:
+        sentences.append(
+            "When temporal context is available, useful transition evidence includes "
+            f"{join_guidance_items(transition_items)}. Do not claim a transition unless the current image "
+            "shows the final state clearly."
+        )
+
+    negative_items = normalize_guidance_items(skill_prior.get("negative_conditions"))
+    if negative_items:
+        sentences.append(f"Keep the skill not completed when {join_guidance_items(negative_items)}.")
+
+    false_positive_items = normalize_guidance_items(skill_prior.get("common_false_positives"))
+    if false_positive_items:
+        sentences.append(
+            "Do not mark completion for look-alikes or insufficient evidence such as "
+            f"{join_guidance_items(false_positive_items)}."
+        )
+
+    ambiguous_items = normalize_guidance_items(skill_prior.get("ambiguous_cases"))
+    if ambiguous_items:
+        sentences.append(f"Use no_for_sure when {join_guidance_items(ambiguous_items)}.")
+
+    if not sentences:
+        return (
+            "Use the generic visible postcondition rules for this skill and stay conservative when the "
+            "decisive target state, contact, support, release, or color evidence is not visible."
+        )
+    return "\n".join(sentences)
+
+
+def describe_target_naturally(value: object) -> str:
     if not isinstance(value, dict):
         return ""
-    pieces = []
-    for key, label in (
-        ("target_object", "object"),
-        ("target_part", "part"),
-        ("color", "color/state"),
-        ("shape", "shape"),
-        ("position", "position"),
-        ("size", "size"),
-        ("count", "count"),
+    target_object = first_text_value([value.get("target_object")])
+    target_part = first_text_value([value.get("target_part")])
+    if target_object and target_part:
+        target = f"the {target_part} of the {target_object}"
+    else:
+        target = target_part or target_object or "the target object or part"
+
+    attributes: List[str] = []
+    for key, phrase in (
+        ("color", "its visible color or state is {}"),
+        ("shape", "it has a {} shape or outline"),
+        ("position", "it is located {}"),
+        ("size", "it is {}"),
+        ("count", "there is {}"),
     ):
         field_value = value.get(key)
         if has_prompt_value(field_value):
-            pieces.append(f"{label}: {field_value}")
-    return "; ".join(str(piece) for piece in pieces)
+            attributes.append(phrase.format(strip_terminal_period(str(field_value))))
+    if attributes:
+        return f"{target}; {join_guidance_items(attributes)}"
+    return target
 
 
-def append_named_value(lines: List[str], label: str, value: object) -> None:
-    if has_prompt_value(value):
-        lines.append(f"- {label}: {value}")
+def first_text_value(values) -> str:
+    for value in values:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return ""
 
 
-def append_named_items(lines: List[str], label: str, value: object) -> None:
-    items = normalize_guidance_items(value)
-    if not items:
-        return
-    lines.append(f"- {label}:")
-    for item in items:
-        lines.append(f"  - {item}")
+def join_guidance_items(items: List[str]) -> str:
+    cleaned = [strip_terminal_period(item) for item in items if strip_terminal_period(item)]
+    return "; ".join(cleaned)
+
+
+def strip_terminal_period(text: str) -> str:
+    return text.strip().rstrip(".")
 
 
 def normalize_guidance_items(value: object) -> List[str]:
