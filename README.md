@@ -224,7 +224,7 @@ generation 不会把完整 `autolabel_prompt_info.json` 直接塞进 Gemini 上�
 
 generation 阶段优先读取父 agent 的 `generation_prompt_guidance` 并直接填入 `Use these task-specific visible postconditions as guidance`；只有旧 prior 文件缺少该字段时，程序才会用结构化字段生成自然语言回退。
 
-`--frame-stride` 会在每个 skill 的 `frame_duration` 范围内，按实际存在的 `stage_xx/frame_*.jpg` 图像帧做间隔采样。因此请确认 `--image-root` 指向图像目录，例如 `.../new_frame_files/task-0000/episode_00000010`，而不是 annotation JSON 所在的 behaviour 目录。
+`--frame-stride` 会复用旧 `api_gemini_without_wrist.py` 的采样方式：先读取 annotation JSON 中的 `valid_duration`，从第一个有效帧开始按 `range(valid_start, valid_end, frame_stride)` 取帧；每个采样帧再根据各 skill 的 `frame_duration` 判断属于哪个 skill，并从对应 `stage_xx/frame_*.jpg` 或 `skill_xx/frame_*.jpg` 目录读取同名图像。因此请确认 `--image-root` 指向包含这些逐帧图像的目录，例如 `.../new_frame_files/task-0000/episode_00000010`。
 
 内部抽取字段包括：
 

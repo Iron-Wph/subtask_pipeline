@@ -166,7 +166,7 @@ def run_episode_generation(
     print(
         "[sampled] "
         f"episode={annotation_json.name} samples={len(sampled)} frame_stride={frame_stride} "
-        "source=available_stage_images",
+        "source=valid_duration_stride",
         flush=True,
     )
 
@@ -246,7 +246,7 @@ def run_episode_generation(
             "image_index_in_stage": sample.image_index_in_stage,
             "frame_number": sample.frame_number,
             "frame_duration": list(skill.frame_duration),
-            "frame_selection": f"available_frame_stride_{frame_stride}",
+            "frame_selection": f"valid_duration_stride_{frame_stride}",
             "frame_stride": frame_stride,
             "skill_description": skill.skill.get("skill_description", ""),
             "object_id": skill.skill.get("object_id", ""),
@@ -276,9 +276,9 @@ def run_episode_generation(
         "prompt_info_json": str(prompt_info_json) if prompt_info_json else "",
         "task_prior_json": str(prompt_info_json) if prompt_info_json else "",
         "rendered_prompt_dir": str(rendered_prompt_dir) if rendered_prompt_dir is not None else "",
-        "frame_selection": f"available_frame_stride_{frame_stride}",
+        "frame_selection": f"valid_duration_stride_{frame_stride}",
         "frame_stride": frame_stride,
-        "sample_source": "available_stage_images",
+        "sample_source": "valid_duration_stride",
         "processed_count": len(records),
         "used_count": len(records),
         "results": records,

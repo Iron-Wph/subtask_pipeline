@@ -134,6 +134,18 @@ def build_skill_specs(annotation: JsonObject) -> List[SkillSpec]:
     return specs
 
 
+def frame_in_duration(frame_number: int, frame_duration: Tuple[int, int]) -> bool:
+    start_frame, end_frame = frame_duration
+    return start_frame <= frame_number < end_frame
+
+
+def find_skill_for_frame(skills: Sequence[SkillSpec], frame_number: int) -> Optional[SkillSpec]:
+    for skill in skills:
+        if frame_in_duration(frame_number, skill.frame_duration):
+            return skill
+    return None
+
+
 def parse_frame_number(image_path: Path) -> Optional[int]:
     match = re.fullmatch(r"frame_(\d+)", image_path.stem)
     if match is None:
@@ -269,30 +281,32 @@ def iter_stride_frames(annotation: JsonObject, image_root: Path, frame_stride: i
         valid_duration = (first, last)
 
     samples: List[Tuple[SkillSpec, SampledFrame]] = []
+    image_cache: Dict[int, Tuple[List[Path], Dict[int, Path]]] = {}
     start_frame, end_frame = valid_duration
-    for skill in skills:
-        images = find_stage_images(image_root, skill.stage_idx)
-        frame_image_map = build_frame_image_map(images)
-        available_frames = sorted(
-            frame_number
-            for frame_number in frame_image_map
-            if start_frame <= frame_number < end_frame
-            and skill.frame_duration[0] <= frame_number < skill.frame_duration[1]
-        )
-        last_selected_frame: Optional[int] = None
-        for frame_number in available_frames:
-            if last_selected_frame is not None and frame_number - last_selected_frame < frame_stride:
-                continue
-            image_path = frame_image_map[frame_number]
-            samples.append(
-                (
-                    skill,
-                    SampledFrame(
-                        frame_number=frame_number,
-                        image_path=image_path,
-                        image_index_in_stage=images.index(image_path),
-                    ),
-                )
+    for frame_number in range(start_frame, end_frame, frame_stride):
+        skill = find_skill_for_frame(skills, frame_number)
+        if skill is None:
+            continue
+        if skill.stage_idx not in image_cache:
+            images = find_stage_images(image_root, skill.stage_idx)
+            frame_image_map = build_frame_image_map(images)
+            if not frame_image_map:
+                raise FileNotFoundError(f"No frame_000123-style images found in {images[0].parent}")
+            image_cache[skill.stage_idx] = (images, frame_image_map)
+        images, frame_image_map = image_cache[skill.stage_idx]
+        image_path = frame_image_map.get(frame_number)
+        if image_path is None:
+            stage_dir = images[0].parent if images else image_root / f"skill_{skill.stage_idx:02d}"
+            expected_stem = f"frame_{frame_number:06d}"
+            raise FileNotFoundError(f"Missing sampled frame image {expected_stem}.* in {stage_dir}")
+        samples.append(
+            (
+                skill,
+                SampledFrame(
+                    frame_number=frame_number,
+                    image_path=image_path,
+                    image_index_in_stage=images.index(image_path),
+                ),
             )
-            last_selected_frame = frame_number
+        )
     return samples
