@@ -153,11 +153,22 @@ def run_episode_generation(
     global_prompt_info = build_global_prompt_info(prompt_info)
     subtask_prior_by_stage = build_subtask_prior_index(prompt_info)
     sampled = iter_stride_frames(episode.annotation, image_root, frame_stride)
+    if not sampled:
+        raise ValueError(
+            "No generation frames were selected. Check that --image-root points to the frame directory "
+            "containing stage_00/frame_000123.jpg files and that frame numbers overlap annotation durations."
+        )
     old_memory = ""
     previous_image_path: Optional[Path] = None
     records: List[JsonObject] = []
     system_instruction = prompt_catalog.get("generation_system")
     rendered_prompt_dir = get_rendered_prompt_output_dir(output_path) if save_rendered_prompts else None
+    print(
+        "[sampled] "
+        f"episode={annotation_json.name} samples={len(sampled)} frame_stride={frame_stride} "
+        "source=available_stage_images",
+        flush=True,
+    )
 
     for request_index, (skill, sample) in enumerate(sampled, start=1):
         subtask_prior = subtask_prior_by_stage.get(skill.stage_idx, {})
@@ -197,8 +208,12 @@ def run_episode_generation(
                 system_instruction=system_instruction,
                 user_prompt=prompt,
                 completion_guidance=completion_guidance,
+                prompt_values=prompt_values,
             )
-            print(f"[prompt-saved] {rendered_prompt_path}", flush=True)
+            print(
+                f"[prompt-saved] json={rendered_prompt_path} markdown={rendered_prompt_path.with_suffix('.md')}",
+                flush=True,
+            )
 
         print(
             "[generate] "
@@ -233,7 +248,7 @@ def run_episode_generation(
             "image_index_in_stage": sample.image_index_in_stage,
             "frame_number": sample.frame_number,
             "frame_duration": list(skill.frame_duration),
-            "frame_selection": f"valid_duration_stride_{frame_stride}",
+            "frame_selection": f"available_frame_stride_{frame_stride}",
             "frame_stride": frame_stride,
             "skill_description": skill.skill.get("skill_description", ""),
             "object_id": skill.skill.get("object_id", ""),
@@ -246,6 +261,7 @@ def run_episode_generation(
             record["google_response_metadata"] = metadata
         if rendered_prompt_path is not None:
             record["rendered_prompt_path"] = str(rendered_prompt_path)
+            record["rendered_prompt_markdown_path"] = str(rendered_prompt_path.with_suffix(".md"))
         records.append(record)
 
         new_memory = response.get("new_memory")
@@ -262,7 +278,9 @@ def run_episode_generation(
         "prompt_info_json": str(prompt_info_json) if prompt_info_json else "",
         "task_prior_json": str(prompt_info_json) if prompt_info_json else "",
         "rendered_prompt_dir": str(rendered_prompt_dir) if rendered_prompt_dir is not None else "",
-        "frame_selection": f"valid_duration_stride_{frame_stride}",
+        "frame_selection": f"available_frame_stride_{frame_stride}",
+        "frame_stride": frame_stride,
+        "sample_source": "available_stage_images",
         "processed_count": len(records),
         "used_count": len(records),
         "results": records,
@@ -296,7 +314,9 @@ def write_rendered_prompt(
     system_instruction: str,
     user_prompt: str,
     completion_guidance: str,
+    prompt_values: JsonObject,
 ) -> None:
+    markdown_path = path.with_suffix(".md")
     payload: JsonObject = {
         "request_index": request_index,
         "skill_idx": skill.skill_idx,
@@ -310,8 +330,66 @@ def write_rendered_prompt(
         "system_instruction": system_instruction,
         "user_prompt": user_prompt,
         "completion_guidance": completion_guidance,
+        "prompt_values": prompt_values,
+        "markdown_path": str(markdown_path),
     }
     write_json(path, payload)
+    write_text(markdown_path, build_rendered_prompt_markdown(payload))
+
+
+def write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def build_rendered_prompt_markdown(payload: JsonObject) -> str:
+    prompt_values = payload.get("prompt_values")
+    if not isinstance(prompt_values, dict):
+        prompt_values = {}
+    metadata = {
+        "request_index": payload.get("request_index"),
+        "stage_idx": payload.get("stage_idx"),
+        "skill_idx": payload.get("skill_idx"),
+        "frame_number": payload.get("frame_number"),
+        "image_path": payload.get("image_path"),
+        "previous_image_path": payload.get("previous_image_path"),
+    }
+    return "\n".join(
+        [
+            "# Rendered Generation Prompt",
+            "",
+            "## Request Metadata",
+            "",
+            "```json",
+            json.dumps(metadata, ensure_ascii=False, indent=2),
+            "```",
+            "",
+            "## Prompt Values Injected Into Template",
+            "",
+            "```json",
+            json.dumps(prompt_values, ensure_ascii=False, indent=2),
+            "```",
+            "",
+            "## Completion Guidance Injected As Rule 16",
+            "",
+            "```text",
+            str(payload.get("completion_guidance", "")),
+            "```",
+            "",
+            "## System Instruction",
+            "",
+            "```text",
+            str(payload.get("system_instruction", "")),
+            "```",
+            "",
+            "## Full User Prompt",
+            "",
+            "```text",
+            str(payload.get("user_prompt", "")),
+            "```",
+            "",
+        ]
+    )
 
 
 def build_subtask_prior_index(task_prior: JsonObject) -> Dict[int, JsonObject]:

@@ -268,31 +268,31 @@ def iter_stride_frames(annotation: JsonObject, image_root: Path, frame_stride: i
         last = max(spec.frame_duration[1] for spec in skills)
         valid_duration = (first, last)
 
-    image_cache: Dict[int, Tuple[List[Path], Dict[int, Path]]] = {}
     samples: List[Tuple[SkillSpec, SampledFrame]] = []
     start_frame, end_frame = valid_duration
-    for frame_number in range(start_frame, end_frame, frame_stride):
-        skill = next(
-            (spec for spec in skills if spec.frame_duration[0] <= frame_number < spec.frame_duration[1]),
-            None,
+    for skill in skills:
+        images = find_stage_images(image_root, skill.stage_idx)
+        frame_image_map = build_frame_image_map(images)
+        available_frames = sorted(
+            frame_number
+            for frame_number in frame_image_map
+            if start_frame <= frame_number < end_frame
+            and skill.frame_duration[0] <= frame_number < skill.frame_duration[1]
         )
-        if skill is None:
-            continue
-        if skill.stage_idx not in image_cache:
-            images = find_stage_images(image_root, skill.stage_idx)
-            image_cache[skill.stage_idx] = (images, build_frame_image_map(images))
-        images, frame_image_map = image_cache[skill.stage_idx]
-        image_path = frame_image_map.get(frame_number)
-        if image_path is None:
-            continue
-        samples.append(
-            (
-                skill,
-                SampledFrame(
-                    frame_number=frame_number,
-                    image_path=image_path,
-                    image_index_in_stage=images.index(image_path),
-                ),
+        last_selected_frame: Optional[int] = None
+        for frame_number in available_frames:
+            if last_selected_frame is not None and frame_number - last_selected_frame < frame_stride:
+                continue
+            image_path = frame_image_map[frame_number]
+            samples.append(
+                (
+                    skill,
+                    SampledFrame(
+                        frame_number=frame_number,
+                        image_path=image_path,
+                        image_index_in_stage=images.index(image_path),
+                    ),
+                )
             )
-        )
+            last_selected_frame = frame_number
     return samples

@@ -224,6 +224,8 @@ generation 不会把完整 `autolabel_prompt_info.json` 直接塞进 Gemini 上�
 
 generation 阶段优先读取父 agent 的 `generation_prompt_guidance` 并直接填入 `Use these task-specific visible postconditions as guidance`；只有旧 prior 文件缺少该字段时，程序才会用结构化字段生成自然语言回退。
 
+`--frame-stride` 会在每个 skill 的 `frame_duration` 范围内，按实际存在的 `stage_xx/frame_*.jpg` 图像帧做间隔采样。因此请确认 `--image-root` 指向图像目录，例如 `.../new_frame_files/task-0000/episode_00000010`，而不是 annotation JSON 所在的 behaviour 目录。
+
 内部抽取字段包括：
 
 ```text
@@ -280,28 +282,28 @@ python generate_dataset.py \
   --save-rendered-prompts
 ```
 
-如果打开 `--save-rendered-prompts`，程序会为每一次大规模生成请求额外保存一份真实渲染后的 prompt：
+如果打开 `--save-rendered-prompts`，程序会为每一次大规模生成请求额外保存两份真实渲染后的 prompt：一份 `.json` 给程序读，一份同名 `.md` 给人检查。
 
 ```text
 outputs/episode_0001/generation/
   episode_0001_generation.json
   episode_0001_generation_prompts/
     request_000001_stage_00_frame_000080.json
+    request_000001_stage_00_frame_000080.md
 ```
 
-每个 prompt JSON 包含：
+`.md` 文件会把内容分块显示：
 
-```json
-{
-  "system_instruction": "...",
-  "user_prompt": "...",
-  "completion_guidance": "...",
-  "image_path": "...",
-  "previous_image_path": "...",
-  "stage_idx": 0,
-  "frame_number": 80
-}
+```text
+Request Metadata
+Prompt Values Injected Into Template
+Completion Guidance Injected As Rule 16
+System Instruction
+Full User Prompt
 ```
+
+这样可以直接看出 `task_name`、`skill_description`、`object_id`、`frame_duration`、`completion_guidance` 等字段分别如何进入最终 prompt，而不是只看到 JSON 字符串转义后的长文本。
+
 
 也可以用主 CLI：
 
