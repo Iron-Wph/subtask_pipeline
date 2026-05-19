@@ -15,6 +15,21 @@ from .gemini_client import GeminiClient
 from .io_utils import JsonObject, read_json, write_json
 from .prompts import PromptCatalog
 
+INDIRECT_EVIDENCE_REPLACEMENTS = (
+    (
+        "use shadows and reflections to accurately judge physical contact and lift-off gaps",
+        "rely on clear, direct visual evidence to judge physical contact and lift-off gaps",
+    ),
+    (
+        "use shadows and reflections to judge physical contact and lift-off gaps",
+        "rely on clear, direct visual evidence to judge physical contact and lift-off gaps",
+    ),
+    (
+        "use shadows or reflections to judge physical contact and lift-off gaps",
+        "rely on clear, direct visual evidence to judge physical contact and lift-off gaps",
+    ),
+)
+
 MODEL_RESPONSE_KEYS = {
     "reasoning",
     "new_memory",
@@ -497,7 +512,7 @@ def build_completion_guidance(global_prompt_info: JsonObject, subtask_prior: Jso
         )
         if natural_guidance:
             lines.append("Task-specific completion and ambiguity rules for the current candidate skill:")
-            lines.append(natural_guidance)
+            lines.append(sanitize_visual_guidance_text(natural_guidance))
         else:
             lines.append(render_skill_prior_as_natural_guidance(primary_prior))
     else:
@@ -521,7 +536,7 @@ def build_completion_guidance(global_prompt_info: JsonObject, subtask_prior: Jso
             lines.append(
                 "Additional child-agent details to preserve when they do not conflict with the parent rules:"
             )
-            lines.append(child_guidance)
+            lines.append(sanitize_visual_guidance_text(child_guidance))
 
     lines.append("")
     lines.append(
@@ -700,15 +715,28 @@ def join_guidance_items(items: List[str]) -> str:
     return "; ".join(cleaned)
 
 
+def sanitize_visual_guidance_text(text: str) -> str:
+    cleaned = text.strip()
+    for old, new in INDIRECT_EVIDENCE_REPLACEMENTS:
+        cleaned = cleaned.replace(old, new)
+        cleaned = cleaned.replace(old.capitalize(), new.capitalize())
+    return cleaned
+
+
 def strip_terminal_period(text: str) -> str:
     return text.strip().rstrip(".")
 
 
 def normalize_guidance_items(value: object) -> List[str]:
     if isinstance(value, list):
-        return [str(item).strip() for item in value if str(item).strip()]
+        items: List[str] = []
+        for item in value:
+            cleaned = sanitize_visual_guidance_text(str(item).strip())
+            if cleaned:
+                items.append(cleaned)
+        return items
     if isinstance(value, str) and value.strip():
-        return [value.strip()]
+        return [sanitize_visual_guidance_text(value.strip())]
     return []
 
 
