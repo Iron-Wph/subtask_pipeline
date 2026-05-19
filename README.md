@@ -145,7 +145,7 @@ state_transition_evidence    需要前后对比的视觉变化，例如红灯变
 negative_conditions          明确说明未完成的视觉条件
 common_false_positives       容易误判为完成但证据不足的画面
 ambiguous_cases              应保守标为 no_for_sure 的情况
-generation_prompt_guidance   直接填入 generation 第 16 条的自然语言判据，由子 agent 生成并由父 agent 改写强化
+generation_prompt_guidance   直接填入 generation 第 16 条的自然语言判据，由子 agent 生成并由父 agent 改写强化；首句应明确写出原始 skill，例如 For the "move to" skill...
 ```
 
 描述原则：

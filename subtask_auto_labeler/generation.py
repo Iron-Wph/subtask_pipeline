@@ -486,15 +486,33 @@ def render_task_context(global_prompt_info: JsonObject) -> str:
 
 def render_skill_prior_as_natural_guidance(skill_prior: JsonObject) -> str:
     sentences: List[str] = []
-    subtask_name = first_text_value([skill_prior.get("subtask_name"), skill_prior.get("skill_description")])
+    skill_label = normalize_skill_label(skill_prior.get("skill_description"))
+    subtask_name = first_text_value([skill_prior.get("subtask_name")])
     target_description = describe_target_naturally(skill_prior.get("target_visual_description"))
-    if subtask_name and target_description:
+    if skill_label and subtask_name and target_description:
         sentences.append(
-            f"For this candidate skill, judge whether the robot is carrying out {subtask_name}. "
+            f"For the current candidate \"{skill_label}\" skill, judge whether the robot has completed "
+            f"the subtask: {subtask_name}. "
+            f"The visual target is {target_description}."
+        )
+    elif skill_label and subtask_name:
+        sentences.append(
+            f"For the current candidate \"{skill_label}\" skill, judge whether the robot has completed "
+            f"the subtask: {subtask_name}."
+        )
+    elif skill_label and target_description:
+        sentences.append(
+            f"For the current candidate \"{skill_label}\" skill, the visual target is {target_description}."
+        )
+    elif skill_label:
+        sentences.append(f"For the current candidate \"{skill_label}\" skill, use the visible postcondition rules below.")
+    elif subtask_name and target_description:
+        sentences.append(
+            f"For this candidate skill, judge whether the robot has completed the subtask: {subtask_name}. "
             f"The visual target is {target_description}."
         )
     elif subtask_name:
-        sentences.append(f"For this candidate skill, judge whether the robot is carrying out {subtask_name}.")
+        sentences.append(f"For this candidate skill, judge whether the robot has completed the subtask: {subtask_name}.")
     elif target_description:
         sentences.append(f"For this candidate skill, the visual target is {target_description}.")
 
@@ -545,7 +563,12 @@ def describe_target_naturally(value: object) -> str:
         return ""
     target_object = first_text_value([value.get("target_object")])
     target_part = first_text_value([value.get("target_part")])
-    if target_object and target_part:
+    normalized_part = target_part.lower()
+    if target_object and normalized_part.startswith("whole "):
+        target = f"the whole {target_object}"
+    elif target_object and target_part and normalized_part == target_object.lower():
+        target = f"the {target_object}"
+    elif target_object and target_part:
         target = f"the {target_part} of the {target_object}"
     else:
         target = target_part or target_object or "the target object or part"
@@ -555,8 +578,8 @@ def describe_target_naturally(value: object) -> str:
         ("color", "its visible color or state is {}"),
         ("shape", "it has a {} shape or outline"),
         ("position", "it is located {}"),
-        ("size", "it is {}"),
-        ("count", "there is {}"),
+        ("size", "its visible size is {}"),
+        ("count", "the relevant count is {}"),
     ):
         field_value = value.get(key)
         if has_prompt_value(field_value):
@@ -564,6 +587,26 @@ def describe_target_naturally(value: object) -> str:
     if attributes:
         return f"{target}; {join_guidance_items(attributes)}"
     return target
+
+
+def normalize_skill_label(value: object) -> str:
+    if isinstance(value, list):
+        return ", ".join(str(item).strip() for item in value if str(item).strip())
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    if text[0] in "[\"'":
+        try:
+            parsed = json.loads(text)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            parsed = None
+        if isinstance(parsed, list):
+            return ", ".join(str(item).strip() for item in parsed if str(item).strip())
+        if isinstance(parsed, str):
+            return parsed.strip()
+    return text.strip("\"'")
 
 
 def first_text_value(values) -> str:
