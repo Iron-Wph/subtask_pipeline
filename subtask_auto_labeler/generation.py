@@ -183,12 +183,10 @@ def run_episode_generation(
             "frame_duration": list(skill.frame_duration),
             "frame_number": sample.frame_number,
             "image_block": build_image_block(has_previous_image),
+            "completion_gate_context": "No extra completion gate.",
             "completion_guidance": completion_guidance,
         }
-        prompt = append_optional_prompt(
-            prompt_catalog.render("generation_user", prompt_values),
-            prompt_catalog.render_optional("target_consistency_rules", prompt_values),
-        )
+        prompt = prompt_catalog.render("generation_user", prompt_values)
         image_paths = [sample.image_path]
         if has_previous_image and previous_image_path is not None:
             image_paths = [previous_image_path, sample.image_path]
@@ -527,8 +525,8 @@ def build_completion_guidance(global_prompt_info: JsonObject, subtask_prior: Jso
 
     lines.append("")
     lines.append(
-        "These task-specific rules replace the old script's hard-coded task rules. Treat them as judging "
-        "criteria, not as visual evidence; the current image and the previous memory still decide the label."
+        "Treat these task-specific rules as judging criteria, not as visual evidence; "
+        "the current image and the previous memory still decide the label."
     )
     return "\n".join(lines)
 
@@ -712,12 +710,6 @@ def normalize_guidance_items(value: object) -> List[str]:
     if isinstance(value, str) and value.strip():
         return [value.strip()]
     return []
-
-
-def append_optional_prompt(prompt: str, optional_prompt: str) -> str:
-    if not optional_prompt.strip():
-        return prompt
-    return f"{prompt}\n\n{optional_prompt.strip()}"
 
 
 def is_complete_generation_output(output: object) -> bool:
