@@ -284,12 +284,12 @@ Do not copy object names, room details, or statuses unless they match the curren
 
 Example 1:
 {
-    "reasoning": "The robot is approaching the target area, and the target object is visible but not yet within a clear interaction pose.",
+    "reasoning": "The robot is positioned behind a glass coffee table in a living room, facing a blue sectional sofa against the wall. A red and white portable radio is visible on the wooden floor beside the blue sofa, but the robot has not yet reached it. The coffee table sits between the robot and the target, indicating the robot is still at a distance and needs to advance toward the radio.",
     "new_memory": {
-        "Progress": "No subtask is finished yet. The robot is moving toward the target object.",
-        "World state": "The robot is facing the workspace where the target object is visible. The target is not yet clearly ready for manipulation."
+        "Progress": "No subtask is finished yet. The robot is moving toward the red and white radio on the floor near the blue sofa.",
+        "World state": "The robot is in a living room with a glass coffee table in the immediate foreground. A blue L-shaped sectional sofa sits against the back wall beneath a large framed picture. A red and white portable radio rests on the wooden floor to the right of the sofa's corner. The walls are light-colored with a large decorative letter 'N' and a white floating shelf holding framed photos on the right wall. The ceiling has recessed lighting and a large white pendant lamp hangs above the coffee table."
     },
-    "subtask": "move to the target object",
+    "subtask": "move to the red and white radio on the floor near the blue sofa",
     "current_skill_status": "in_progress",
     "visible_transition": "",
     "is_subtask_completed": false
@@ -297,26 +297,65 @@ Example 1:
 
 Example 2:
 {
-    "reasoning": "The robot is positioned at the target interaction location and the target object is within immediate working distance.",
+    "reasoning": "The robot has advanced from the room entrance toward the target area, bringing the red and white radio into clear view on the wooden floor beside the blue sectional sofa. The glass coffee table remains prominent in the foreground, indicating the robot is still positioned at a distance from the radio and has not yet arrived at the interaction point.",
     "new_memory": {
-        "Progress": "Moved to the target object.",
-        "World state": "The robot is at the workspace with the target object reachable for the next step."
+        "Progress": "No subtask is finished yet. The robot is still moving toward the red and white radio near the corner of the blue sectional sofa.",
+        "World state": "The robot faces the blue L-shaped sectional sofa against the back wall. A red and white portable radio rests on the light wooden flooring near the right corner of the sofa. A glass coffee table occupies the immediate foreground, while a large white pendant lamp hangs from the ceiling above. The right wall displays a decorative letter 'N' and a white floating shelf with framed photos, and a large framed picture hangs above the sofa."
     },
-    "subtask": "move to the target object",
+    "subtask": "move to the red and white radio on the floor near the blue sofa",
+    "current_skill_status": "in_progress",
+    "visible_transition": "",
+    "is_subtask_completed": false
+}
+
+Example 3:
+{
+    "reasoning": "The robot has moved from its previous position to a vantage point directly facing the red and white radio. The radio is now prominently positioned in the center of the view on the wooden floor, just beyond the glass coffee table and near the corner of the blue sectional sofa. Compared to the earlier state where the robot was still approaching, the radio is now clearly in close proximity and accessible, indicating the approach phase has concluded.",
+    "new_memory": {
+        "Progress": "Moved to the red and white radio on the floor near the blue sectional sofa.",
+        "World state": "The robot is positioned near the red and white portable radio resting on the light wooden flooring at the corner of the blue L-shaped sectional sofa. A glass coffee table occupies the immediate foreground, a large white pendant lamp hangs overhead, and the right wall displays a decorative letter 'N' with a white floating shelf."
+    },
+    "subtask": "move to the red and white radio on the floor near the blue sectional sofa",
     "current_skill_status": "completed",
     "visible_transition": "",
     "is_subtask_completed": true
 }
 
-Example 3:
+Example 4:
 {
-    "reasoning": "The gripper partially occludes the target object, so the decisive support or state-change evidence is not reliable from this view.",
+    "reasoning": "The robot is positioned at the glass coffee table with the red and white radio clearly visible resting on its reflective surface within immediate reach. This visible pose and object proximity show that the navigation-to-target subtask has reached its postcondition. The gripper is not yet visible around the radio, so the pick-up motion has not yet produced a visible grasp.",
     "new_memory": {
-        "Progress": "The robot is interacting with the target object, but completion cannot be confirmed from the current view.",
-        "World state": "The target object is near the robot gripper, with the decisive contact or support region partly hidden."
+        "Progress": "Moved to the glass coffee table near the red and white radio. The robot is trying to pick up the radio from the table, but the grasp is not established yet.",
+        "World state": "The red and white portable radio rests on the reflective glass coffee table in the foreground. Behind the table is a blue L-shaped sectional sofa against the back wall, with a large abstract painting above it. A large white pendant lamp hangs from the ceiling, and a decorative letter 'N' with a white floating shelf is mounted on the right wall. The floor is light wood, and the robot is facing the radio on the table."
     },
-    "subtask": "manipulate the target object",
+    "subtask": "pick up the red and white radio from the glass coffee table",
+    "current_skill_status": "in_progress",
+    "visible_transition": "",
+    "is_subtask_completed": false
+}
+
+Example 5:
+{
+    "reasoning": "The gripper is close to the red and white radio and partly covers the contact region, while reflections on the glass make the area under the radio difficult to read. The radio may be grasped, but the base and underside are not clearly separated from the table surface, so the image does not provide reliable lift-off evidence.",
+    "new_memory": {
+        "Progress": "Moved to the glass coffee table near the red and white radio. The robot is grasping or reaching around the radio, but lift-off cannot be confirmed from this view.",
+        "World state": "The red and white portable radio is at the glass coffee table with the robot gripper near or partly around it. The table surface is reflective, and the support/contact area below the radio is not clearly visible enough to confirm whether the radio is lifted."
+    },
+    "subtask": "pick up the red and white radio from the glass coffee table",
     "current_skill_status": "no_for_sure",
+    "visible_transition": "",
+    "is_subtask_completed": false
+}
+
+Example 6:
+{
+    "reasoning": "The radio is being held near the glass coffee table and the gripper is close to the top control area. The small circular dot in the top control remains red, and the visible target control does not show a green state.",
+    "new_memory": {
+        "Progress": "Moved to the glass coffee table; picked up the red and white radio; now pressing or checking the top button, which is still visibly red.",
+        "World state": "The robot is holding the red and white portable radio near the glass coffee table. The top circular control area is visible, and the small dot/button on it appears red rather than green."
+    },
+    "subtask": "press the top button on the red and white radio",
+    "current_skill_status": "in_progress",
     "visible_transition": "",
     "is_subtask_completed": false
 }"""
