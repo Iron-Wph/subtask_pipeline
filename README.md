@@ -233,9 +233,8 @@ global prior:
   task_name
   prior_min_items
   task_summary
-  global_completion_order
-  global_visual_adjustments
-  cross_subtask_false_positive_risks
+
+Parent agent no longer saves or uses `global_completion_order`, `global_visual_adjustments`, or `cross_subtask_false_positive_risks`. Required ordering, state carryover, and cross-skill false-positive handling should be written directly into each skill's `generation_prompt_guidance`.
 
 current skill prior:
   child_prior

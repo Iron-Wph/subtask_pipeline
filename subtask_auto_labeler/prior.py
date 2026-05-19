@@ -35,9 +35,6 @@ SUBTASK_SUMMARY_KEYS = {
 }
 PARENT_PRIOR_KEYS = {
     "task_summary",
-    "global_completion_order",
-    "global_visual_adjustments",
-    "cross_subtask_false_positive_risks",
     "skills",
 }
 DEFAULT_PRIOR_MIN_ITEMS = 4
@@ -337,7 +334,7 @@ def run_parent_prior(
         prompt=prompt,
         required_keys=PARENT_PRIOR_KEYS,
     )
-    response = sanitize_visual_guidance(response)
+    response = normalize_parent_prior_response(response)
     parent_prior: JsonObject = {
         "agent_type": "parent_prior_agent",
         "task_name": episode.task_name,
@@ -354,6 +351,14 @@ def run_parent_prior(
     write_json(output_path, parent_prior)
     print(f"[saved] {output_path}", flush=True)
     return parent_prior
+
+
+def normalize_parent_prior_response(response: JsonObject) -> JsonObject:
+    cleaned = sanitize_visual_guidance(response)
+    return {
+        "task_summary": cleaned.get("task_summary", ""),
+        "skills": cleaned.get("skills", []),
+    }
 
 
 def merge_string_lists(groups) -> List[str]:

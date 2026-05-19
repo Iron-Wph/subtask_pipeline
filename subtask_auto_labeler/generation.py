@@ -26,9 +26,6 @@ MODEL_RESPONSE_KEYS = {
 }
 GLOBAL_PRIOR_KEYS = (
     "task_summary",
-    "global_completion_order",
-    "global_visual_adjustments",
-    "cross_subtask_false_positive_risks",
 )
 SKILL_PRIOR_KEYS = (
     "stage_idx",
@@ -537,27 +534,6 @@ def render_task_context(global_prompt_info: JsonObject) -> str:
     task_summary = global_prompt_info.get("task_summary")
     if has_prompt_value(task_summary):
         sentences.append(f"At the task level, the episode goal is {strip_terminal_period(str(task_summary))}.")
-
-    completion_order = normalize_guidance_items(global_prompt_info.get("global_completion_order"))
-    if completion_order:
-        sentences.append(
-            "Keep the global order in mind as context: "
-            f"{join_guidance_items(completion_order)}. Do not use the order alone as proof of completion."
-        )
-
-    visual_adjustments = normalize_guidance_items(global_prompt_info.get("global_visual_adjustments"))
-    if visual_adjustments:
-        sentences.append(f"Apply these task-level visual safeguards: {join_guidance_items(visual_adjustments)}.")
-
-    false_positive_risks = normalize_guidance_items(
-        global_prompt_info.get("cross_subtask_false_positive_risks")
-    )
-    if false_positive_risks:
-        sentences.append(
-            "Also guard against cross-skill false positives such as "
-            f"{join_guidance_items(false_positive_risks)}."
-        )
-
     return "\n".join(sentences)
 
 
