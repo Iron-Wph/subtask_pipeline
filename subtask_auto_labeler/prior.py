@@ -7,6 +7,7 @@ from .dataset import EpisodeData, SkillSpec, load_episode, sample_subtask_images
 from .gemini_client import GeminiClient
 from .io_utils import JsonObject, write_json
 from .prompts import PromptCatalog
+from .visual_guidance import sanitize_visual_guidance
 
 SUBTASK_FRAME_KEYS = {
     "frame_reasoning",
@@ -159,6 +160,7 @@ def run_subtask_prior(
             image_paths=image_paths,
             required_keys=SUBTASK_FRAME_KEYS,
         )
+        response = sanitize_visual_guidance(response)
         frame_record: JsonObject = {
             "request_index": request_index,
             "frame_number": sample.frame_number,
@@ -297,6 +299,7 @@ def consolidate_subtask_prior(
         prompt=prompt,
         required_keys=SUBTASK_SUMMARY_KEYS,
     )
+    response = sanitize_visual_guidance(response)
 
     consolidated = dict(preliminary_prior)
     for key in SUBTASK_SUMMARY_KEYS:
@@ -304,7 +307,7 @@ def consolidate_subtask_prior(
     consolidated["summary_model_response"] = response
     if metadata:
         consolidated["summary_google_response_metadata"] = metadata
-    return consolidated
+    return sanitize_visual_guidance(consolidated)
 
 
 def run_parent_prior(
@@ -334,6 +337,7 @@ def run_parent_prior(
         prompt=prompt,
         required_keys=PARENT_PRIOR_KEYS,
     )
+    response = sanitize_visual_guidance(response)
     parent_prior: JsonObject = {
         "agent_type": "parent_prior_agent",
         "task_name": episode.task_name,
@@ -346,6 +350,7 @@ def run_parent_prior(
     }
     if metadata:
         parent_prior["google_response_metadata"] = metadata
+    parent_prior = sanitize_visual_guidance(parent_prior)
     write_json(output_path, parent_prior)
     print(f"[saved] {output_path}", flush=True)
     return parent_prior

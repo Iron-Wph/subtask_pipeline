@@ -14,21 +14,7 @@ from .dataset import (
 from .gemini_client import GeminiClient
 from .io_utils import JsonObject, read_json, write_json
 from .prompts import PromptCatalog
-
-INDIRECT_EVIDENCE_REPLACEMENTS = (
-    (
-        "use shadows and reflections to accurately judge physical contact and lift-off gaps",
-        "rely on clear, direct visual evidence to judge physical contact and lift-off gaps",
-    ),
-    (
-        "use shadows and reflections to judge physical contact and lift-off gaps",
-        "rely on clear, direct visual evidence to judge physical contact and lift-off gaps",
-    ),
-    (
-        "use shadows or reflections to judge physical contact and lift-off gaps",
-        "rely on clear, direct visual evidence to judge physical contact and lift-off gaps",
-    ),
-)
+from .visual_guidance import sanitize_visual_guidance_text
 
 MODEL_RESPONSE_KEYS = {
     "reasoning",
@@ -713,14 +699,6 @@ def first_text_value(values) -> str:
 def join_guidance_items(items: List[str]) -> str:
     cleaned = [strip_terminal_period(item) for item in items if strip_terminal_period(item)]
     return "; ".join(cleaned)
-
-
-def sanitize_visual_guidance_text(text: str) -> str:
-    cleaned = text.strip()
-    for old, new in INDIRECT_EVIDENCE_REPLACEMENTS:
-        cleaned = cleaned.replace(old, new)
-        cleaned = cleaned.replace(old.capitalize(), new.capitalize())
-    return cleaned
 
 
 def strip_terminal_period(text: str) -> str:
