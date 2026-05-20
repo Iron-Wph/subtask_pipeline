@@ -44,6 +44,8 @@ def parse_json_response(content: str, required_keys: Optional[Iterable[str]] = N
         parsed = json.loads(strip_json_fence(content))
     except json.JSONDecodeError as exc:
         raise ModelResponseFormatError("Model returned invalid JSON", content) from exc
+    if isinstance(parsed, list) and len(parsed) == 1 and isinstance(parsed[0], dict):
+        parsed = parsed[0]
     if not isinstance(parsed, dict):
         raise ModelResponseFormatError("Model returned JSON that is not an object", content)
     if required_keys:
@@ -149,7 +151,8 @@ class GeminiClient:
             if format_attempt > 0:
                 request_prompt = (
                     f"{prompt}\n\nThe previous response was invalid or incomplete. "
-                    "Return exactly one valid JSON object with the required keys."
+                    "Return exactly one valid JSON object with the required keys. "
+                    "Do not wrap the object in a JSON array."
                 )
             contents: List[Any] = [request_prompt, *image_parts]
             response = self._generate_content_with_retries(contents=contents, config=config)
