@@ -29,7 +29,7 @@ nano .env
 
 ```env
 GEMINI_API_KEY=your_key
-GEMINI_MODEL=gemini-3.1-pro-preview
+GEMINI_MODEL=gemini-3.5-flash
 GEMINI_TEMPERATURE=0.2
 ```
 

@@ -9,7 +9,7 @@ except ImportError:  # pragma: no cover - dependency error is raised later if ne
     load_dotenv = None
 
 
-DEFAULT_MODEL = "gemini-3.1-pro-preview"
+DEFAULT_MODEL = "gemini-3.5-flash"
 
 
 @dataclass(frozen=True)
