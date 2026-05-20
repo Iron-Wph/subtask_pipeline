@@ -12,23 +12,35 @@ from .visual_guidance import sanitize_visual_guidance
 SUBTASK_FRAME_KEYS = {
     "frame_reasoning",
     "frame_state_memory",
+    "skill_type_hypothesis",
+    "target_binding",
     "subtask_name",
     "target_visual_description",
+    "pre_completion_state",
+    "in_progress_state",
+    "completion_gates",
     "completion_conditions",
     "required_visual_evidence",
     "state_transition_evidence",
     "negative_conditions",
+    "not_sufficient_for_completion",
     "common_false_positives",
     "ambiguous_cases",
     "status_hint",
 }
 SUBTASK_SUMMARY_KEYS = {
+    "skill_type_hypothesis",
+    "target_binding",
     "subtask_name",
     "target_visual_description",
+    "pre_completion_state",
+    "in_progress_state",
+    "completion_gates",
     "completion_conditions",
     "required_visual_evidence",
     "state_transition_evidence",
     "negative_conditions",
+    "not_sufficient_for_completion",
     "common_false_positives",
     "ambiguous_cases",
     "generation_prompt_guidance",
@@ -137,6 +149,8 @@ def run_subtask_prior(
             "sample_count": len(samples),
             "prior_min_items": prior_min_items,
             "previous_frame_context": previous_context,
+            "universal_visual_rubric": prompt_catalog.render_optional("universal_visual_rubric", {}),
+            "action_primitive_rubric": prompt_catalog.render_optional("action_primitive_rubric", {}),
         }
         prompt = append_optional_prompt(
             prompt_catalog.render("subtask_prior_user", prompt_values),
@@ -194,6 +208,15 @@ def summarize_subtask_prior(
     skill: SkillSpec,
     frame_results: List[JsonObject],
 ) -> JsonObject:
+    pre_completion_state = merge_string_lists(
+        record["model_response"].get("pre_completion_state", []) for record in frame_results
+    )
+    in_progress_state = merge_string_lists(
+        record["model_response"].get("in_progress_state", []) for record in frame_results
+    )
+    completion_gates = merge_string_lists(
+        record["model_response"].get("completion_gates", []) for record in frame_results
+    )
     completion_conditions = merge_string_lists(
         record["model_response"].get("completion_conditions", []) for record in frame_results
     )
@@ -205,6 +228,9 @@ def summarize_subtask_prior(
     )
     negative_conditions = merge_string_lists(
         record["model_response"].get("negative_conditions", []) for record in frame_results
+    )
+    not_sufficient_for_completion = merge_string_lists(
+        record["model_response"].get("not_sufficient_for_completion", []) for record in frame_results
     )
     common_false_positives = merge_string_lists(
         record["model_response"].get("common_false_positives", []) for record in frame_results
@@ -219,6 +245,12 @@ def summarize_subtask_prior(
     ]
     subtask_name = first_text_value(
         record["model_response"].get("subtask_name") for record in frame_results
+    )
+    skill_type_hypothesis = first_text_value(
+        record["model_response"].get("skill_type_hypothesis") for record in frame_results
+    )
+    target_binding = first_json_object(
+        record["model_response"].get("target_binding") for record in frame_results
     )
     target_visual_description = first_json_object(
         record["model_response"].get("target_visual_description") for record in frame_results
@@ -243,16 +275,22 @@ def summarize_subtask_prior(
         "stage_idx": skill.stage_idx,
         "skill_idx": skill.skill_idx,
         "skill_description": skill.skill_description,
+        "skill_type_hypothesis": skill_type_hypothesis,
         "subtask_name": subtask_name or skill.skill_description,
+        "target_binding": target_binding,
         "target_visual_description": target_visual_description,
         "object_id": skill.object_id,
         "manuipation_object_id": skill.manuipation_object_id,
         "frame_duration": list(skill.frame_duration),
         "sample_count": len(frame_results),
+        "pre_completion_state": pre_completion_state,
+        "in_progress_state": in_progress_state,
+        "completion_gates": completion_gates,
         "completion_conditions": completion_conditions,
         "required_visual_evidence": required_visual_evidence,
         "state_transition_evidence": state_transition_evidence,
         "negative_conditions": negative_conditions,
+        "not_sufficient_for_completion": not_sufficient_for_completion,
         "common_false_positives": common_false_positives,
         "ambiguous_cases": ambiguous_cases,
         "frame_state_memories": frame_state_memories,
@@ -281,6 +319,9 @@ def consolidate_subtask_prior(
         "frame_duration": list(skill.frame_duration),
         "prior_min_items": prior_min_items,
         "preliminary_prior_json": json.dumps(preliminary_prior, ensure_ascii=False, indent=2),
+        "universal_visual_rubric": prompt_catalog.render_optional("universal_visual_rubric", {}),
+        "action_primitive_rubric": prompt_catalog.render_optional("action_primitive_rubric", {}),
+        "prior_review_rubric": prompt_catalog.render_optional("prior_review_rubric", {}),
     }
     prompt = append_optional_prompt(
         prompt_catalog.render("subtask_prior_summary_user", prompt_values),
@@ -323,6 +364,9 @@ def run_parent_prior(
         "image_root": str(episode.image_root),
         "prior_min_items": prior_min_items,
         "subtask_priors_json": json.dumps(subtask_results, ensure_ascii=False, indent=2),
+        "universal_visual_rubric": prompt_catalog.render_optional("universal_visual_rubric", {}),
+        "action_primitive_rubric": prompt_catalog.render_optional("action_primitive_rubric", {}),
+        "prior_review_rubric": prompt_catalog.render_optional("prior_review_rubric", {}),
     }
     prompt = append_optional_prompt(
         prompt_catalog.render("parent_prior_user", prompt_values),

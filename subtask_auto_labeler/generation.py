@@ -31,12 +31,18 @@ SKILL_PRIOR_KEYS = (
     "stage_idx",
     "skill_idx",
     "skill_description",
+    "skill_type_hypothesis",
     "subtask_name",
+    "target_binding",
     "target_visual_description",
+    "pre_completion_state",
+    "in_progress_state",
+    "completion_gates",
     "completion_conditions",
     "required_visual_evidence",
     "state_transition_evidence",
     "negative_conditions",
+    "not_sufficient_for_completion",
     "common_false_positives",
     "ambiguous_cases",
     "generation_prompt_guidance",
@@ -570,11 +576,21 @@ def render_skill_prior_as_natural_guidance(skill_prior: JsonObject) -> str:
         sentences.append(f"For this candidate skill, the visual target is {target_description}.")
 
     completion_items = normalize_guidance_items(skill_prior.get("completion_conditions"))
+    completion_gates = normalize_guidance_items(skill_prior.get("completion_gates"))
+    if completion_gates:
+        sentences.append(
+            "Require all decisive completion gates to be visible: "
+            f"{join_guidance_items(completion_gates)}."
+        )
     if completion_items:
         sentences.append(
             "Treat the skill as completed only when "
             f"{join_guidance_items(completion_items)}."
         )
+
+    in_progress_items = normalize_guidance_items(skill_prior.get("in_progress_state"))
+    if in_progress_items:
+        sentences.append(f"Treat the skill as still in progress when {join_guidance_items(in_progress_items)}.")
 
     evidence_items = normalize_guidance_items(skill_prior.get("required_visual_evidence"))
     if evidence_items:
@@ -591,6 +607,13 @@ def render_skill_prior_as_natural_guidance(skill_prior: JsonObject) -> str:
     negative_items = normalize_guidance_items(skill_prior.get("negative_conditions"))
     if negative_items:
         sentences.append(f"Keep the skill not completed when {join_guidance_items(negative_items)}.")
+
+    insufficient_items = normalize_guidance_items(skill_prior.get("not_sufficient_for_completion"))
+    if insufficient_items:
+        sentences.append(
+            "Do not treat insufficient progress as completion, including "
+            f"{join_guidance_items(insufficient_items)}."
+        )
 
     false_positive_items = normalize_guidance_items(skill_prior.get("common_false_positives"))
     if false_positive_items:

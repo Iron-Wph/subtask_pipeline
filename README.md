@@ -77,7 +77,7 @@ manuipation_object_id 或 manipulating_object_id
 
 每个 skill 会在 `frame_duration` 内均匀采样 `k` 帧，默认 `k=10`，不包含起始帧和终止帧。从第二个采样帧开始，prior 请求会同时带上上一采样帧图像和上一轮响应，用于提取更明确的视觉状态转移。
 
-最终每个 skill 的列表字段默认至少生成 4 条非重复描述，可通过 `--prior-min-items` 调整。列表字段包括 `completion_conditions`、`required_visual_evidence`、`state_transition_evidence`、`negative_conditions`、`common_false_positives` 和 `ambiguous_cases`。同一字段内会要求覆盖不同角度，例如目标颜色/形状/位置/大小/数量、机器人夹爪接触或撤离、前后状态变化、遮挡、反光、运动模糊和视角歧义。
+???? skill ???????? prior???????? agent ?? agent ??????????????? 4 ?????????? `--prior-min-items` ????????? `pre_completion_state`?`in_progress_state`?`completion_gates`?`completion_conditions`?`required_visual_evidence`?`state_transition_evidence`?`negative_conditions`?`not_sufficient_for_completion`?`common_false_positives` ? `ambiguous_cases`??????????????????????/??/??/??/?????????????/????????????????????????????
 
 prior 阶段不是直接生成最终逐帧标签，但每个采样帧会保存轻量状态记忆：`frame_reasoning` 和 `frame_state_memory`。其中 `frame_state_memory` 记录目标部件当前状态、机器人与目标部件的空间/接触关系、相对上一采样帧的变化和不确定性。后续汇总时会用这些帧级状态信息生成更稳定的完成条件。
 
@@ -100,12 +100,23 @@ outputs/episode_0001/prior/
   autolabel_prompt_info.json
 ```
 
-每个 skill 的提示信息结构：
+?? skill ????????
 
 ```json
 {
   "skill_idx": 0,
   "skill_description": "...",
+  "skill_type_hypothesis": "move_to | object_acquisition | object_placement | state_change_press_toggle | open_close | push_pull_slide | pour_transfer_insert_remove | other",
+  "target_binding": {
+    "target_object": "...",
+    "target_part": "...",
+    "manipulated_object": "...",
+    "support_surface": "...",
+    "target_location": "...",
+    "robot_effector": "...",
+    "visible_attributes": ["..."],
+    "count": "..."
+  },
   "subtask_name": "...",
   "target_visual_description": {
     "target_object": "...",
@@ -116,10 +127,14 @@ outputs/episode_0001/prior/
     "size": "...",
     "count": "..."
   },
+  "pre_completion_state": ["..."],
+  "in_progress_state": ["..."],
+  "completion_gates": ["..."],
   "completion_conditions": ["..."],
   "required_visual_evidence": ["..."],
   "state_transition_evidence": ["..."],
   "negative_conditions": ["..."],
+  "not_sufficient_for_completion": ["..."],
   "common_false_positives": ["..."],
   "ambiguous_cases": ["..."],
   "generation_prompt_guidance": "natural-language Rule 16 guidance for this skill"
@@ -127,6 +142,8 @@ outputs/episode_0001/prior/
 ```
 
 这些结构化字段用于保存可见判据，`generation_prompt_guidance` 是面向大规模生成阶段的自然语言第 16 条判据。它不是把 key/value 原样贴给模型，而是由子 agent 汇总采样帧后生成、再由父 agent 结合全局任务重新改写的自然规则块。`memory` 更新格式、输出 JSON 格式、主体称谓等通用规则仍由 `generate_dataset.py` 的通用 prompt 固定提供。
+
+prior generation uses three levels of constraints: `universal_visual_rubric` defines direct visible evidence and target consistency; `action_primitive_rubric` defines generic robot action primitives such as move, pick, place, press, and open/close; `prior_review_rubric` asks the parent agent to audit weak child-agent criteria, false-positive risks, and the natural-language guidance. The large-scale generation stage does not load these generic rubrics directly; it loads each skill-specific `generation_prompt_guidance` that the parent agent has already written into JSON.
 
 ## 子任务描述应该包含什么
 
@@ -236,19 +253,16 @@ global prior:
 
 Parent agent no longer saves or uses `global_completion_order`, `global_visual_adjustments`, or `cross_subtask_false_positive_risks`. Required ordering, state carryover, and cross-skill false-positive handling should be written directly into each skill's `generation_prompt_guidance`.
 
-current skill prior:
   child_prior
-    stage_idx / skill_idx / skill_description / subtask_name
-    target_visual_description
-    completion_conditions
-    required_visual_evidence
-    state_transition_evidence
-    negative_conditions
-    common_false_positives
-    ambiguous_cases
+    stage_idx / skill_idx / skill_description / skill_type_hypothesis / subtask_name
+    target_binding / target_visual_description
+    pre_completion_state / in_progress_state / completion_gates
+    completion_conditions / required_visual_evidence / state_transition_evidence
+    negative_conditions / not_sufficient_for_completion
+    common_false_positives / ambiguous_cases
     generation_prompt_guidance
   parent_adjusted_prior
-    同上，但来自父 agent 的全局调整结果，其中 generation_prompt_guidance 是父 agent 改写后的自然语言判据
+    ??????? agent ????????????? generation_prompt_guidance ?????? generation ? 16 ????????
 ```
 
 `raw_frame_requests`、采样帧分析日志、Gemini metadata 和完整子任务列表不会进入每帧请求。旧脚本里写死的任务规则被拆成了两部分：
