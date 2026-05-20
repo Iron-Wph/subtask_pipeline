@@ -50,6 +50,45 @@ PARENT_PRIOR_KEYS = {
     "skills",
 }
 DEFAULT_PRIOR_MIN_ITEMS = 4
+PRIOR_SKILL_KEYS = (
+    "stage_idx",
+    "skill_idx",
+    "skill_description",
+    "skill_type_hypothesis",
+    "target_binding",
+    "subtask_name",
+    "target_visual_description",
+    "object_id",
+    "manuipation_object_id",
+    "frame_duration",
+    "pre_completion_state",
+    "in_progress_state",
+    "completion_gates",
+    "completion_conditions",
+    "required_visual_evidence",
+    "state_transition_evidence",
+    "negative_conditions",
+    "not_sufficient_for_completion",
+    "common_false_positives",
+    "ambiguous_cases",
+    "generation_prompt_guidance",
+)
+PRIOR_LIST_FIELDS = {
+    "pre_completion_state",
+    "in_progress_state",
+    "completion_gates",
+    "completion_conditions",
+    "required_visual_evidence",
+    "state_transition_evidence",
+    "negative_conditions",
+    "not_sufficient_for_completion",
+    "common_false_positives",
+    "ambiguous_cases",
+}
+PRIOR_DICT_FIELDS = {
+    "target_binding",
+    "target_visual_description",
+}
 
 
 def run_prior_pipeline(
@@ -379,6 +418,7 @@ def run_parent_prior(
         required_keys=PARENT_PRIOR_KEYS,
     )
     response = normalize_parent_prior_response(response)
+    response = merge_parent_response_with_child_priors(response, subtask_results)
     parent_prior: JsonObject = {
         "agent_type": "parent_prior_agent",
         "task_name": episode.task_name,
@@ -403,6 +443,91 @@ def normalize_parent_prior_response(response: JsonObject) -> JsonObject:
         "task_summary": cleaned.get("task_summary", ""),
         "skills": cleaned.get("skills", []),
     }
+
+
+def has_prompt_value(value: object) -> bool:
+    return value not in (None, "", [], {})
+
+
+def merge_parent_response_with_child_priors(
+    parent_response: JsonObject,
+    child_priors: List[JsonObject],
+) -> JsonObject:
+    child_by_stage = {
+        child["stage_idx"]: child
+        for child in child_priors
+        if isinstance(child.get("stage_idx"), int)
+    }
+    child_by_skill = {
+        str(child["skill_idx"]): child
+        for child in child_priors
+        if child.get("skill_idx") is not None
+    }
+    parent_skills = parent_response.get("skills")
+    if not isinstance(parent_skills, list):
+        parent_skills = []
+
+    merged_skills: List[JsonObject] = []
+    used_child_stages = set()
+    for parent_skill in parent_skills:
+        if not isinstance(parent_skill, dict):
+            continue
+        child = find_matching_child_prior(parent_skill, child_by_stage, child_by_skill)
+        merged = merge_skill_prior_with_child(parent_skill, child)
+        stage_idx = merged.get("stage_idx")
+        if isinstance(stage_idx, int):
+            used_child_stages.add(stage_idx)
+        merged_skills.append(merged)
+
+    for child in child_priors:
+        stage_idx = child.get("stage_idx")
+        if isinstance(stage_idx, int) and stage_idx in used_child_stages:
+            continue
+        merged_skills.append(merge_skill_prior_with_child({}, child))
+
+    return {
+        "task_summary": parent_response.get("task_summary", ""),
+        "skills": merged_skills,
+    }
+
+
+def find_matching_child_prior(parent_skill: JsonObject, child_by_stage, child_by_skill) -> JsonObject:
+    stage_idx = parent_skill.get("stage_idx")
+    if isinstance(stage_idx, int) and stage_idx in child_by_stage:
+        return child_by_stage[stage_idx]
+    skill_idx = parent_skill.get("skill_idx")
+    if skill_idx is not None:
+        child = child_by_skill.get(str(skill_idx))
+        if isinstance(child, dict):
+            return child
+    return {}
+
+
+def merge_skill_prior_with_child(parent_skill: JsonObject, child_prior: JsonObject) -> JsonObject:
+    merged: JsonObject = {}
+    for key in PRIOR_SKILL_KEYS:
+        parent_value = parent_skill.get(key)
+        child_value = child_prior.get(key)
+        if key in PRIOR_LIST_FIELDS:
+            value = merge_string_lists([parent_value, child_value])
+        elif key in PRIOR_DICT_FIELDS:
+            value = merge_dict_values(child_value, parent_value)
+        else:
+            value = parent_value if has_prompt_value(parent_value) else child_value
+        if has_prompt_value(value):
+            merged[key] = value
+    return sanitize_visual_guidance(merged)
+
+
+def merge_dict_values(base_value, override_value) -> JsonObject:
+    merged: JsonObject = {}
+    if isinstance(base_value, dict):
+        merged.update(base_value)
+    if isinstance(override_value, dict):
+        for key, value in override_value.items():
+            if has_prompt_value(value):
+                merged[key] = value
+    return merged
 
 
 def merge_string_lists(groups) -> List[str]:
