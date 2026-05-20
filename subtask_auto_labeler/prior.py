@@ -50,44 +50,31 @@ PARENT_PRIOR_KEYS = {
     "skills",
 }
 DEFAULT_PRIOR_MIN_ITEMS = 4
-PRIOR_SKILL_KEYS = (
+PARENT_REVIEW_KEYS = (
     "stage_idx",
     "skill_idx",
     "skill_description",
-    "skill_type_hypothesis",
-    "target_binding",
     "subtask_name",
-    "target_visual_description",
-    "object_id",
-    "manuipation_object_id",
-    "frame_duration",
-    "pre_completion_state",
-    "in_progress_state",
-    "completion_gates",
-    "completion_conditions",
-    "required_visual_evidence",
-    "state_transition_evidence",
-    "negative_conditions",
-    "not_sufficient_for_completion",
-    "common_false_positives",
-    "ambiguous_cases",
-    "generation_prompt_guidance",
+    "review_status",
+    "review_notes",
+    "target_consistency_issues",
+    "missing_or_weak_child_criteria",
+    "completion_gate_corrections",
+    "additional_negative_conditions",
+    "additional_not_sufficient_for_completion",
+    "additional_ambiguous_cases",
+    "cross_skill_risks",
+    "parent_review_guidance",
 )
-PRIOR_LIST_FIELDS = {
-    "pre_completion_state",
-    "in_progress_state",
-    "completion_gates",
-    "completion_conditions",
-    "required_visual_evidence",
-    "state_transition_evidence",
-    "negative_conditions",
-    "not_sufficient_for_completion",
-    "common_false_positives",
-    "ambiguous_cases",
-}
-PRIOR_DICT_FIELDS = {
-    "target_binding",
-    "target_visual_description",
+PARENT_REVIEW_LIST_FIELDS = {
+    "review_notes",
+    "target_consistency_issues",
+    "missing_or_weak_child_criteria",
+    "completion_gate_corrections",
+    "additional_negative_conditions",
+    "additional_not_sufficient_for_completion",
+    "additional_ambiguous_cases",
+    "cross_skill_risks",
 }
 
 
@@ -411,7 +398,7 @@ def run_parent_prior(
         prompt_catalog.render("parent_prior_user", prompt_values),
         prompt_catalog.render_optional("target_consistency_rules", prompt_values),
     )
-    print("[prior-parent] adjusting task-level prior", flush=True)
+    print("[prior-parent] reviewing child priors", flush=True)
     response, metadata = gemini_client.generate_json(
         system_instruction=system_instruction,
         prompt=prompt,
@@ -420,7 +407,7 @@ def run_parent_prior(
     response = normalize_parent_prior_response(response)
     response = merge_parent_response_with_child_priors(response, subtask_results)
     parent_prior: JsonObject = {
-        "agent_type": "parent_prior_agent",
+        "agent_type": "parent_review_agent",
         "task_name": episode.task_name,
         "annotation_json": str(episode.annotation_json),
         "image_root": str(episode.image_root),
@@ -473,7 +460,7 @@ def merge_parent_response_with_child_priors(
         if not isinstance(parent_skill, dict):
             continue
         child = find_matching_child_prior(parent_skill, child_by_stage, child_by_skill)
-        merged = merge_skill_prior_with_child(parent_skill, child)
+        merged = build_parent_review_skill(parent_skill, child)
         stage_idx = merged.get("stage_idx")
         if isinstance(stage_idx, int):
             used_child_stages.add(stage_idx)
@@ -483,7 +470,7 @@ def merge_parent_response_with_child_priors(
         stage_idx = child.get("stage_idx")
         if isinstance(stage_idx, int) and stage_idx in used_child_stages:
             continue
-        merged_skills.append(merge_skill_prior_with_child({}, child))
+        merged_skills.append(build_parent_review_skill({}, child))
 
     return {
         "task_summary": parent_response.get("task_summary", ""),
@@ -503,31 +490,18 @@ def find_matching_child_prior(parent_skill: JsonObject, child_by_stage, child_by
     return {}
 
 
-def merge_skill_prior_with_child(parent_skill: JsonObject, child_prior: JsonObject) -> JsonObject:
+def build_parent_review_skill(parent_skill: JsonObject, child_prior: JsonObject) -> JsonObject:
     merged: JsonObject = {}
-    for key in PRIOR_SKILL_KEYS:
+    for key in PARENT_REVIEW_KEYS:
         parent_value = parent_skill.get(key)
         child_value = child_prior.get(key)
-        if key in PRIOR_LIST_FIELDS:
-            value = merge_string_lists([parent_value, child_value])
-        elif key in PRIOR_DICT_FIELDS:
-            value = merge_dict_values(child_value, parent_value)
+        if key in PARENT_REVIEW_LIST_FIELDS:
+            value = merge_string_lists([parent_value])
         else:
             value = parent_value if has_prompt_value(parent_value) else child_value
         if has_prompt_value(value):
             merged[key] = value
     return sanitize_visual_guidance(merged)
-
-
-def merge_dict_values(base_value, override_value) -> JsonObject:
-    merged: JsonObject = {}
-    if isinstance(base_value, dict):
-        merged.update(base_value)
-    if isinstance(override_value, dict):
-        for key, value in override_value.items():
-            if has_prompt_value(value):
-                merged[key] = value
-    return merged
 
 
 def merge_string_lists(groups) -> List[str]:
