@@ -141,9 +141,9 @@ Prompt information structure for each skill:
 }
 ```
 
-These structured fields store the child agent's visual criteria. `generation_prompt_guidance` is the child agent's main natural-language Rule 16 guidance after sampled-frame consolidation; it is not a raw key/value dump. The parent agent now acts as a reviewer and supplementer, not as the default replacement for the child guidance. Generic memory format, output JSON format, actor naming, and status rules still come from the shared `generate_dataset.py` prompt.
+These structured fields store the child agent's visual criteria. `generation_prompt_guidance` is the child agent's main natural-language Rule 16 guidance after sampled-frame consolidation; it is not a raw key/value dump. The parent agent acts as a reviewer and QA annotator only; parent review fields are saved for inspection and are not injected into frame-level generation prompts. Generic memory format, output JSON format, actor naming, and status rules still come from the shared `generate_dataset.py` prompt.
 
-Prior generation uses three levels of constraints: `universal_visual_rubric` defines direct visible evidence and target consistency; `action_primitive_rubric` defines generic robot action primitives such as move, pick, place, press, and open/close; `prior_review_rubric` asks the parent agent to audit weak child-agent criteria, false-positive risks, and natural-language guidance. Large-scale generation does not load these generic rubrics directly; it loads the child `generation_prompt_guidance`, child structured guardrails, and parent review corrections for the current skill.
+Prior generation uses three levels of constraints: `universal_visual_rubric` defines direct visible evidence and target consistency; `action_primitive_rubric` defines generic robot action primitives such as move, pick, place, press, and open/close; `prior_review_rubric` asks the parent agent to audit weak child-agent criteria and false-positive risks for offline review. Large-scale generation does not load these generic rubrics directly; it loads only the child `generation_prompt_guidance` and child structured guardrails for the current skill.
 
 ## 子任务描述应该包含什么
 
@@ -239,9 +239,9 @@ generation_prompt_guidance      Main natural-language Rule 16 guidance generated
 }
 ```
 
-Generation does not paste the full `autolabel_prompt_info.json` into Gemini, and it does not paste raw structured key/value JSON into the prompt. The flow is now: the child agent generates the main `generation_prompt_guidance`; the parent agent returns only `parent_review_guidance`, extra gates, extra negatives, extra ambiguous cases, and cross-skill risks.
+Generation does not paste the full `autolabel_prompt_info.json` into Gemini, and it does not paste raw structured key/value JSON into the prompt. The flow is now: the child agent generates the main `generation_prompt_guidance`; the parent agent returns QA review fields that are saved in JSON but not used as generation-time rules.
 
-Generation reads the child `generation_prompt_guidance` first, then appends `pre_completion_state`, `in_progress_state`, `completion_gates`, and `not_sufficient_for_completion` as child structured guardrails, and finally appends parent review corrections. If an old prior file lacks child `generation_prompt_guidance`, the code falls back to rendering natural guidance from the structured fields.
+Generation reads the child `generation_prompt_guidance`, then appends `pre_completion_state`, `in_progress_state`, `completion_gates`, and `not_sufficient_for_completion` as child structured guardrails. If an old prior file lacks child `generation_prompt_guidance`, the code falls back to rendering natural guidance from the child structured fields.
 
 `--frame-stride` 会复用旧 `api_gemini_without_wrist.py` 的采样方式：先读取 annotation JSON 中的 `valid_duration`，从第一个有效帧开始按 `range(valid_start, valid_end, frame_stride)` 取帧；每个采样帧再根据各 skill 的 `frame_duration` 判断属于哪个 skill，并从对应 `stage_xx/frame_*.jpg` 或 `skill_xx/frame_*.jpg` 目录读取同名图像。因此请确认 `--image-root` 指向包含这些逐帧图像的目录，例如 `.../new_frame_files/task-0000/episode_00000010`。
 
@@ -262,21 +262,16 @@ current skill prior:
     negative_conditions / not_sufficient_for_completion
     common_false_positives / ambiguous_cases
     generation_prompt_guidance
-  parent_review_prior
-    review_status / review_notes / target_consistency_issues
-    missing_or_weak_child_criteria / completion_gate_corrections
-    additional_negative_conditions / additional_not_sufficient_for_completion
-    additional_ambiguous_cases / cross_skill_risks / parent_review_guidance
 ```
 
-`raw_frame_requests`, sampled-frame analysis logs, Gemini metadata, and the full child prior list are not sent to each frame request.
+`raw_frame_requests`, sampled-frame analysis logs, Gemini metadata, the full child prior list, and parent review fields are not sent to each frame request.
 
 ```text
 Generic judgment logic:
   Stays in generation_user rules 1-15 and 17-19.
 
 Task-specific visual criteria:
-  Uses child `generation_prompt_guidance` as the main Rule 16 criteria, appends child structured guardrails, then appends parent `parent_review_guidance` and correction lists.
+  Uses child `generation_prompt_guidance` as the main Rule 16 criteria and appends child structured guardrails only.
 ```
 
 Rule 16 example:

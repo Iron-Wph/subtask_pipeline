@@ -46,16 +46,6 @@ SKILL_PRIOR_KEYS = (
     "common_false_positives",
     "ambiguous_cases",
     "generation_prompt_guidance",
-    "review_status",
-    "review_notes",
-    "target_consistency_issues",
-    "missing_or_weak_child_criteria",
-    "completion_gate_corrections",
-    "additional_negative_conditions",
-    "additional_not_sufficient_for_completion",
-    "additional_ambiguous_cases",
-    "cross_skill_risks",
-    "parent_review_guidance",
 )
 
 
@@ -406,7 +396,6 @@ def build_rendered_prompt_markdown(payload: JsonObject) -> str:
 
 def build_subtask_prior_index(task_prior: JsonObject) -> Dict[int, JsonObject]:
     child_index: Dict[int, JsonObject] = {}
-    child_stage_by_skill_idx: Dict[int, int] = {}
     subtasks = task_prior.get("subtask_priors")
     if not isinstance(subtasks, list):
         subtasks = task_prior.get("skills")
@@ -417,35 +406,10 @@ def build_subtask_prior_index(task_prior: JsonObject) -> Dict[int, JsonObject]:
             stage_idx = item.get("stage_idx")
             if isinstance(stage_idx, int):
                 child_index[stage_idx] = compact_skill_prior(item)
-                skill_idx = item.get("skill_idx")
-                if isinstance(skill_idx, int):
-                    child_stage_by_skill_idx[skill_idx] = stage_idx
-
-    adjusted_index: Dict[int, JsonObject] = {}
-    model_response = task_prior.get("model_response")
-    if isinstance(model_response, dict):
-        adjusted = model_response.get("skills")
-        if not isinstance(adjusted, list):
-            adjusted = model_response.get("subtask_priors")
-        if isinstance(adjusted, list):
-            for item in adjusted:
-                if not isinstance(item, dict):
-                    continue
-                stage_idx = item.get("stage_idx")
-                if not isinstance(stage_idx, int):
-                    skill_idx = item.get("skill_idx")
-                    if isinstance(skill_idx, int):
-                        stage_idx = child_stage_by_skill_idx.get(skill_idx, skill_idx)
-                if isinstance(stage_idx, int):
-                    adjusted_index[stage_idx] = compact_skill_prior(item)
 
     merged: Dict[int, JsonObject] = {}
     for stage_idx, child_prior in child_index.items():
         merged[stage_idx] = {"child_prior": child_prior}
-        if stage_idx in adjusted_index:
-            merged[stage_idx]["parent_review_prior"] = adjusted_index[stage_idx]
-    for stage_idx, adjusted_prior in adjusted_index.items():
-        merged.setdefault(stage_idx, {})["parent_review_prior"] = adjusted_prior
     return merged
 
 
@@ -494,34 +458,28 @@ def build_completion_guidance(global_prompt_info: JsonObject, subtask_prior: Jso
     if task_context:
         lines.append(task_context)
 
-    parent_prior = subtask_prior.get("parent_review_prior") or subtask_prior.get("parent_adjusted_prior")
     child_prior = subtask_prior.get("child_prior")
-    primary_prior = child_prior if isinstance(child_prior, dict) else parent_prior
 
-    if isinstance(primary_prior, dict) and primary_prior:
+    if isinstance(child_prior, dict) and child_prior:
         if lines:
             lines.append("")
         natural_guidance = first_text_value(
             [
-                primary_prior.get("generation_prompt_guidance"),
-                primary_prior.get("completion_guidance"),
-                primary_prior.get("prompt_guidance"),
+                child_prior.get("generation_prompt_guidance"),
+                child_prior.get("completion_guidance"),
+                child_prior.get("prompt_guidance"),
             ]
         )
         if natural_guidance:
-            if isinstance(child_prior, dict):
-                lines.append("Primary child-agent skill guidance for the current candidate skill:")
-            else:
-                lines.append("Task-specific skill guidance for the current candidate skill:")
+            lines.append("Primary child-agent skill guidance for the current candidate skill:")
             lines.append(sanitize_visual_guidance_text(natural_guidance))
         else:
-            lines.append(render_skill_prior_as_natural_guidance(primary_prior))
-        if isinstance(child_prior, dict):
-            child_state_guidance = render_child_structured_guardrails(child_prior)
-            if child_state_guidance:
-                lines.append("")
-                lines.append("Child-agent structured visual state guardrails:")
-                lines.append(child_state_guidance)
+            lines.append(render_skill_prior_as_natural_guidance(child_prior))
+        child_state_guidance = render_child_structured_guardrails(child_prior)
+        if child_state_guidance:
+            lines.append("")
+            lines.append("Child-agent structured visual state guardrails:")
+            lines.append(child_state_guidance)
     else:
         if lines:
             lines.append("")
@@ -529,25 +487,6 @@ def build_completion_guidance(global_prompt_info: JsonObject, subtask_prior: Jso
             "No task-specific prior is available for this candidate skill. Use the generic visible "
             "postcondition rules above and stay conservative when the decisive visual evidence is missing."
         )
-
-    if isinstance(parent_prior, dict) and parent_prior:
-        parent_review_guidance = render_parent_review_guidance(parent_prior)
-        if parent_review_guidance:
-            lines.append("")
-            lines.append("Parent-agent review corrections and risk warnings:")
-            lines.append(parent_review_guidance)
-        elif not isinstance(child_prior, dict):
-            legacy_parent_guidance = first_text_value(
-                [
-                    parent_prior.get("generation_prompt_guidance"),
-                    parent_prior.get("completion_guidance"),
-                    parent_prior.get("prompt_guidance"),
-                ]
-            )
-            if legacy_parent_guidance:
-                lines.append("")
-                lines.append("Parent-agent skill guidance:")
-                lines.append(sanitize_visual_guidance_text(legacy_parent_guidance))
 
     lines.append("")
     lines.append(
@@ -564,37 +503,6 @@ def render_child_structured_guardrails(child_prior: JsonObject) -> str:
         (child_prior.get("in_progress_state"), "Visible in-progress states that are not completed"),
         (child_prior.get("completion_gates"), "Decisive completion gates"),
         (child_prior.get("not_sufficient_for_completion"), "Insufficient progress patterns"),
-    ):
-        items = normalize_guidance_items(value)
-        if items:
-            lines.append(f"{label}: {join_guidance_items(items)}.")
-    return "\n".join(lines)
-
-
-def render_parent_review_guidance(parent_prior: JsonObject) -> str:
-    natural_guidance = first_text_value(
-        [
-            parent_prior.get("parent_review_guidance"),
-            parent_prior.get("review_guidance"),
-            parent_prior.get("correction_guidance"),
-        ]
-    )
-    lines: List[str] = []
-    if natural_guidance:
-        lines.append(sanitize_visual_guidance_text(natural_guidance))
-
-    for value, label in (
-        (parent_prior.get("completion_gate_corrections"), "Additional or stricter completion gates"),
-        (parent_prior.get("additional_negative_conditions"), "Additional negative conditions"),
-        (
-            parent_prior.get("additional_not_sufficient_for_completion"),
-            "Additional insufficient-progress patterns",
-        ),
-        (parent_prior.get("additional_ambiguous_cases"), "Additional no_for_sure ambiguity cases"),
-        (parent_prior.get("target_consistency_issues"), "Target consistency issues to avoid"),
-        (parent_prior.get("missing_or_weak_child_criteria"), "Weak child-agent criteria corrected by review"),
-        (parent_prior.get("cross_skill_risks"), "Cross-skill false-positive risks"),
-        (parent_prior.get("review_notes"), "Parent review notes"),
     ):
         items = normalize_guidance_items(value)
         if items:
