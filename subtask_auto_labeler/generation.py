@@ -3,6 +3,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from .checkpoint import checkpoint_status, error_to_json, save_checkpoint
 from .dataset import (
     SampledFrame,
     SkillSpec,
@@ -91,50 +92,67 @@ def run_generation_pipeline(
         output_dir = output_path
 
     episodes: List[JsonObject] = []
-    for annotation_json in annotation_jsons:
-        episode_image_root = resolve_episode_image_root(
-            annotation_json,
-            image_root,
-            multiple_episodes=multiple,
-        )
-        episode_output_path = output_dir / f"{annotation_json.stem}_generation.json"
-        if resume and episode_output_path.exists():
-            existing_output = read_json(episode_output_path)
-            if is_complete_generation_output(existing_output):
-                print(f"[skip] existing={episode_output_path}", flush=True)
-                episodes.append(existing_output)
-                continue
-
-        episode_output = run_episode_generation(
-            annotation_json=annotation_json,
-            image_root=episode_image_root,
-            output_path=episode_output_path,
-            prompt_catalog=prompt_catalog,
-            gemini_client=gemini_client,
-            prompt_info_json=resolve_prompt_info_path(
-                annotation_json=annotation_json,
-                explicit_prompt_info_json=prompt_info_json or task_prior_json,
-                prompt_info_root=prompt_info_root or prior_root,
+    current_episode: Optional[Path] = None
+    try:
+        for annotation_json in annotation_jsons:
+            current_episode = annotation_json
+            episode_image_root = resolve_episode_image_root(
+                annotation_json,
+                image_root,
                 multiple_episodes=multiple,
-            ),
-            frame_stride=frame_stride,
-            request_delay=request_delay,
-            include_previous_image=include_previous_image,
-            save_rendered_prompts=save_rendered_prompts,
-        )
-        episodes.append(episode_output)
+            )
+            episode_output_path = output_dir / f"{annotation_json.stem}_generation.json"
+            if resume and episode_output_path.exists():
+                existing_output = read_json(episode_output_path)
+                if is_complete_generation_output(existing_output):
+                    print(f"[skip] existing={episode_output_path}", flush=True)
+                    episodes.append(existing_output)
+                    continue
 
-    aggregate = {
-        "annotation_path": str(annotation_path),
-        "image_root": str(image_root),
-        "episode_offset": episode_offset,
-        "episode_limit": episode_limit,
-        "selected_episode_count": len(annotation_jsons),
-        "total_episode_count": total_episode_count,
-        "episode_count": len(episodes),
-        "processed_count": sum(int(episode.get("processed_count", 0)) for episode in episodes),
-        "episodes": episodes,
-    }
+            episode_output = run_episode_generation(
+                annotation_json=annotation_json,
+                image_root=episode_image_root,
+                output_path=episode_output_path,
+                prompt_catalog=prompt_catalog,
+                gemini_client=gemini_client,
+                prompt_info_json=resolve_prompt_info_path(
+                    annotation_json=annotation_json,
+                    explicit_prompt_info_json=prompt_info_json or task_prior_json,
+                    prompt_info_root=prompt_info_root or prior_root,
+                    multiple_episodes=multiple,
+                ),
+                frame_stride=frame_stride,
+                request_delay=request_delay,
+                include_previous_image=include_previous_image,
+                save_rendered_prompts=save_rendered_prompts,
+            )
+            episodes.append(episode_output)
+    except BaseException as exc:
+        aggregate = build_generation_aggregate(
+            annotation_path=annotation_path,
+            image_root=image_root,
+            episode_offset=episode_offset,
+            episode_limit=episode_limit,
+            selected_episode_count=len(annotation_jsons),
+            total_episode_count=total_episode_count,
+            episodes=episodes,
+            status=checkpoint_status(exc),
+            error=error_to_json(exc),
+            current_episode=str(current_episode) if current_episode else "",
+        )
+        save_checkpoint(aggregate_path, aggregate)
+        raise
+
+    aggregate = build_generation_aggregate(
+        annotation_path=annotation_path,
+        image_root=image_root,
+        episode_offset=episode_offset,
+        episode_limit=episode_limit,
+        selected_episode_count=len(annotation_jsons),
+        total_episode_count=total_episode_count,
+        episodes=episodes,
+        status="complete",
+    )
     write_json(aggregate_path, aggregate)
     print(f"[saved] {aggregate_path}", flush=True)
     return aggregate
@@ -179,138 +197,230 @@ def run_episode_generation(
         flush=True,
     )
 
-    for request_index, (skill, sample) in enumerate(sampled, start=1):
-        subtask_prior = subtask_prior_by_stage.get(skill.stage_idx, {})
-        has_previous_image = include_previous_image and previous_image_path is not None
-        completion_guidance = build_completion_guidance(global_prompt_info, subtask_prior)
-        completion_gate_context = build_completion_gate_context(
-            skill=skill,
-            subtask_prior=subtask_prior,
-            request_index=request_index,
-            last_request_index=last_request_index_by_stage.get(skill.stage_idx),
-        )
-        prompt_values = {
-            "task_name": episode.task_name,
-            "old_memory": old_memory,
-            "skill_description": skill.skill_description,
-            "object_id": skill.object_id,
-            "manuipation_object_id": skill.manuipation_object_id,
-            "frame_duration": list(skill.frame_duration),
-            "frame_number": sample.frame_number,
-            "image_block": build_image_block(has_previous_image),
-            "completion_gate_context": completion_gate_context,
-            "completion_guidance": completion_guidance,
-        }
-        prompt = prompt_catalog.render("generation_user", prompt_values)
-        image_paths = [sample.image_path]
-        if has_previous_image and previous_image_path is not None:
-            image_paths = [previous_image_path, sample.image_path]
-
-        rendered_prompt_path: Optional[Path] = None
-        if rendered_prompt_dir is not None:
-            rendered_prompt_path = (
-                rendered_prompt_dir
-                / f"request_{request_index:06d}_stage_{skill.stage_idx:02d}_frame_{sample.frame_number:06d}.json"
-            )
-            write_rendered_prompt(
-                path=rendered_prompt_path,
-                request_index=request_index,
+    current_request: Optional[JsonObject] = None
+    try:
+        for request_index, (skill, sample) in enumerate(sampled, start=1):
+            current_request = {
+                "request_index": request_index,
+                "total_requests": len(sampled),
+                "stage_idx": skill.stage_idx,
+                "skill_idx": skill.skill_idx,
+                "frame_number": sample.frame_number,
+                "image_path": str(sample.image_path),
+            }
+            subtask_prior = subtask_prior_by_stage.get(skill.stage_idx, {})
+            has_previous_image = include_previous_image and previous_image_path is not None
+            completion_guidance = build_completion_guidance(global_prompt_info, subtask_prior)
+            completion_gate_context = build_completion_gate_context(
                 skill=skill,
-                sample=sample,
-                previous_image_path=previous_image_path if has_previous_image else None,
-                system_instruction=system_instruction,
-                user_prompt=prompt,
-                completion_guidance=completion_guidance,
-                prompt_values=prompt_values,
+                subtask_prior=subtask_prior,
+                request_index=request_index,
+                last_request_index=last_request_index_by_stage.get(skill.stage_idx),
             )
+            prompt_values = {
+                "task_name": episode.task_name,
+                "old_memory": old_memory,
+                "skill_description": skill.skill_description,
+                "object_id": skill.object_id,
+                "manuipation_object_id": skill.manuipation_object_id,
+                "frame_duration": list(skill.frame_duration),
+                "frame_number": sample.frame_number,
+                "image_block": build_image_block(has_previous_image),
+                "completion_gate_context": completion_gate_context,
+                "completion_guidance": completion_guidance,
+            }
+            prompt = prompt_catalog.render("generation_user", prompt_values)
+            image_paths = [sample.image_path]
+            if has_previous_image and previous_image_path is not None:
+                image_paths = [previous_image_path, sample.image_path]
+
+            rendered_prompt_path: Optional[Path] = None
+            if rendered_prompt_dir is not None:
+                rendered_prompt_path = (
+                    rendered_prompt_dir
+                    / f"request_{request_index:06d}_stage_{skill.stage_idx:02d}_frame_{sample.frame_number:06d}.json"
+                )
+                write_rendered_prompt(
+                    path=rendered_prompt_path,
+                    request_index=request_index,
+                    skill=skill,
+                    sample=sample,
+                    previous_image_path=previous_image_path if has_previous_image else None,
+                    system_instruction=system_instruction,
+                    user_prompt=prompt,
+                    completion_guidance=completion_guidance,
+                    prompt_values=prompt_values,
+                )
+                print(
+                    f"[prompt-saved] json={rendered_prompt_path} markdown={rendered_prompt_path.with_suffix('.md')}",
+                    flush=True,
+                )
+
             print(
-                f"[prompt-saved] json={rendered_prompt_path} markdown={rendered_prompt_path.with_suffix('.md')}",
+                "[generate] "
+                f"sample={request_index}/{len(sampled)} stage_idx={skill.stage_idx} "
+                f"frame={sample.frame_number} image={sample.image_path}",
                 flush=True,
             )
+            response, metadata = gemini_client.generate_json(
+                system_instruction=system_instruction,
+                prompt=prompt,
+                image_paths=image_paths,
+                required_keys=MODEL_RESPONSE_KEYS,
+            )
+            request_input: JsonObject = {
+                "image_path": str(sample.image_path),
+                "main_task": episode.task_name,
+                "old_memory": old_memory,
+                "skill_description": skill.skill_description,
+                "object_id": skill.object_id,
+                "manuipation_object_id": skill.manuipation_object_id,
+                "frame_number": sample.frame_number,
+                "frame_duration": list(skill.frame_duration),
+                "completion_guidance": completion_guidance,
+                "completion_gate_context": completion_gate_context,
+            }
+            if has_previous_image and previous_image_path is not None:
+                request_input["previous_image_path"] = str(previous_image_path)
+            model_response = normalize_model_response(response)
+            hard_completion_gate = apply_hard_completion_gates(
+                response=model_response,
+                skill=skill,
+                subtask_prior=subtask_prior,
+                request_index=request_index,
+                last_request_index=last_request_index_by_stage.get(skill.stage_idx),
+            )
+            record: JsonObject = {
+                "skill_idx": skill.skill_idx,
+                "stage_idx": skill.stage_idx,
+                "image_dir": sample.image_path.parent.name,
+                "image_path": str(sample.image_path),
+                "image_index_in_stage": sample.image_index_in_stage,
+                "frame_number": sample.frame_number,
+                "frame_duration": list(skill.frame_duration),
+                "frame_selection": f"valid_duration_stride_{frame_stride}",
+                "frame_stride": frame_stride,
+                "skill_description": skill.skill.get("skill_description", ""),
+                "object_id": skill.skill.get("object_id", ""),
+                "manuipation_object_id": skill.manuipation_object_id,
+                "request_input": request_input,
+                "model_response": model_response,
+                "result_used": True,
+            }
+            if hard_completion_gate:
+                record["hard_completion_gate"] = hard_completion_gate
+            if metadata:
+                record["google_response_metadata"] = metadata
+            if rendered_prompt_path is not None:
+                record["rendered_prompt_path"] = str(rendered_prompt_path)
+                record["rendered_prompt_markdown_path"] = str(rendered_prompt_path.with_suffix(".md"))
+            records.append(record)
 
-        print(
-            "[generate] "
-            f"sample={request_index}/{len(sampled)} stage_idx={skill.stage_idx} "
-            f"frame={sample.frame_number} image={sample.image_path}",
-            flush=True,
+            new_memory = model_response.get("new_memory")
+            if new_memory:
+                old_memory = new_memory if isinstance(new_memory, str) else json.dumps(new_memory, ensure_ascii=False)
+            previous_image_path = sample.image_path
+            if request_delay > 0 and request_index < len(sampled):
+                time.sleep(request_delay)
+    except BaseException as exc:
+        output = build_episode_generation_output(
+            annotation_json=annotation_json,
+            image_root=image_root,
+            task_name=episode.task_name,
+            prompt_info_json=prompt_info_json,
+            rendered_prompt_dir=rendered_prompt_dir,
+            frame_stride=frame_stride,
+            records=records,
+            expected_count=len(sampled),
+            status=checkpoint_status(exc),
+            error=error_to_json(exc),
+            current_request=current_request,
         )
-        response, metadata = gemini_client.generate_json(
-            system_instruction=system_instruction,
-            prompt=prompt,
-            image_paths=image_paths,
-            required_keys=MODEL_RESPONSE_KEYS,
-        )
-        request_input: JsonObject = {
-            "image_path": str(sample.image_path),
-            "main_task": episode.task_name,
-            "old_memory": old_memory,
-            "skill_description": skill.skill_description,
-            "object_id": skill.object_id,
-            "manuipation_object_id": skill.manuipation_object_id,
-            "frame_number": sample.frame_number,
-            "frame_duration": list(skill.frame_duration),
-            "completion_guidance": completion_guidance,
-            "completion_gate_context": completion_gate_context,
-        }
-        if has_previous_image and previous_image_path is not None:
-            request_input["previous_image_path"] = str(previous_image_path)
-        model_response = normalize_model_response(response)
-        hard_completion_gate = apply_hard_completion_gates(
-            response=model_response,
-            skill=skill,
-            subtask_prior=subtask_prior,
-            request_index=request_index,
-            last_request_index=last_request_index_by_stage.get(skill.stage_idx),
-        )
-        record: JsonObject = {
-            "skill_idx": skill.skill_idx,
-            "stage_idx": skill.stage_idx,
-            "image_dir": sample.image_path.parent.name,
-            "image_path": str(sample.image_path),
-            "image_index_in_stage": sample.image_index_in_stage,
-            "frame_number": sample.frame_number,
-            "frame_duration": list(skill.frame_duration),
-            "frame_selection": f"valid_duration_stride_{frame_stride}",
-            "frame_stride": frame_stride,
-            "skill_description": skill.skill.get("skill_description", ""),
-            "object_id": skill.skill.get("object_id", ""),
-            "manuipation_object_id": skill.manuipation_object_id,
-            "request_input": request_input,
-            "model_response": model_response,
-            "result_used": True,
-        }
-        if hard_completion_gate:
-            record["hard_completion_gate"] = hard_completion_gate
-        if metadata:
-            record["google_response_metadata"] = metadata
-        if rendered_prompt_path is not None:
-            record["rendered_prompt_path"] = str(rendered_prompt_path)
-            record["rendered_prompt_markdown_path"] = str(rendered_prompt_path.with_suffix(".md"))
-        records.append(record)
+        save_checkpoint(output_path, output)
+        raise
 
-        new_memory = model_response.get("new_memory")
-        if new_memory:
-            old_memory = new_memory if isinstance(new_memory, str) else json.dumps(new_memory, ensure_ascii=False)
-        previous_image_path = sample.image_path
-        if request_delay > 0 and request_index < len(sampled):
-            time.sleep(request_delay)
+    output = build_episode_generation_output(
+        annotation_json=annotation_json,
+        image_root=image_root,
+        task_name=episode.task_name,
+        prompt_info_json=prompt_info_json,
+        rendered_prompt_dir=rendered_prompt_dir,
+        frame_stride=frame_stride,
+        records=records,
+        expected_count=len(sampled),
+        status="complete",
+    )
+    write_json(output_path, output)
+    print(f"[saved] {output_path}", flush=True)
+    return output
 
-    output = {
+
+def build_generation_aggregate(
+    *,
+    annotation_path: Path,
+    image_root: Path,
+    episode_offset: int,
+    episode_limit: Optional[int],
+    selected_episode_count: int,
+    total_episode_count: int,
+    episodes: List[JsonObject],
+    status: str,
+    error: Optional[JsonObject] = None,
+    current_episode: str = "",
+) -> JsonObject:
+    aggregate: JsonObject = {
+        "status": status,
+        "annotation_path": str(annotation_path),
+        "image_root": str(image_root),
+        "episode_offset": episode_offset,
+        "episode_limit": episode_limit,
+        "selected_episode_count": selected_episode_count,
+        "total_episode_count": total_episode_count,
+        "episode_count": len(episodes),
+        "processed_count": sum(int(episode.get("processed_count", 0)) for episode in episodes),
+        "episodes": episodes,
+    }
+    if current_episode:
+        aggregate["current_episode"] = current_episode
+    if error is not None:
+        aggregate["error"] = error
+    return aggregate
+
+
+def build_episode_generation_output(
+    *,
+    annotation_json: Path,
+    image_root: Path,
+    task_name: str,
+    prompt_info_json: Optional[Path],
+    rendered_prompt_dir: Optional[Path],
+    frame_stride: int,
+    records: List[JsonObject],
+    expected_count: int,
+    status: str,
+    error: Optional[JsonObject] = None,
+    current_request: Optional[JsonObject] = None,
+) -> JsonObject:
+    output: JsonObject = {
+        "status": status,
         "annotation_json": str(annotation_json),
         "image_root": str(image_root),
-        "task_name": episode.task_name,
+        "task_name": task_name,
         "prompt_info_json": str(prompt_info_json) if prompt_info_json else "",
         "task_prior_json": str(prompt_info_json) if prompt_info_json else "",
         "rendered_prompt_dir": str(rendered_prompt_dir) if rendered_prompt_dir is not None else "",
         "frame_selection": f"valid_duration_stride_{frame_stride}",
         "frame_stride": frame_stride,
         "sample_source": "valid_duration_stride",
+        "expected_count": expected_count,
         "processed_count": len(records),
         "used_count": len(records),
         "results": records,
     }
-    write_json(output_path, output)
-    print(f"[saved] {output_path}", flush=True)
+    if current_request is not None:
+        output["current_request"] = current_request
+    if error is not None:
+        output["error"] = error
     return output
 
 
@@ -845,11 +955,17 @@ def normalize_guidance_items(value: object) -> List[str]:
 
 
 def is_complete_generation_output(output: object) -> bool:
-    return (
-        isinstance(output, dict)
-        and isinstance(output.get("results"), list)
-        and int(output.get("processed_count", 0)) == len(output.get("results", []))
-    )
+    if not isinstance(output, dict) or not isinstance(output.get("results"), list):
+        return False
+    if output.get("status") in {"failed", "interrupted"}:
+        return False
+    results = output.get("results", [])
+    if int(output.get("processed_count", 0)) != len(results):
+        return False
+    expected_count = output.get("expected_count")
+    if isinstance(expected_count, int) and expected_count != len(results):
+        return False
+    return True
 
 
 def resolve_prompt_info_path(

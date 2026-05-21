@@ -422,6 +422,67 @@ python generate_dataset.py \
 
 `--resume` 会跳过已经完整生成的单 episode 输出。
 
+## 中断和报错保存
+
+长时间运行时，程序会在用户键盘中断、模型请求超时、无效 JSON、API 报错或其它异常退出前尽量保存已完成结果。
+
+### prior 阶段
+
+如果中断发生在子任务 frame-level prior 请求中，当前子任务文件会被保存为 partial checkpoint：
+
+```text
+outputs/episode_0001/prior/subtasks/subtask_XX_prior.json
+```
+
+其中包含：
+
+```text
+status                  interrupted 或 failed
+expected_sample_count    当前 skill 原计划采样请求数
+processed_sample_count   已成功完成的采样请求数
+current_request          中断时正在处理的 stage_idx / skill_idx / frame_number / image_path
+error                    异常类型、错误消息、是否键盘中断、traceback
+raw_frame_requests       已完成的 frame-level Gemini 响应
+sampled_frame_analysis   已完成帧的轻量状态分析
+```
+
+如果中断发生在子任务汇总请求中，同一个 `subtask_XX_prior.json` 会保留 frame-level preliminary prior 和错误信息。如果中断发生在父 agent 审查阶段，`task_prior.json` 会保存已完成的全部子任务结果和父阶段错误信息。
+
+整个 prior pipeline 还会额外保存：
+
+```text
+outputs/episode_0001/prior/prior_checkpoint.json
+```
+
+这个文件用于快速查看当前停在第几个 skill、已经完成了哪些子任务，以及错误来源。
+
+### generation 阶段
+
+如果中断发生在逐帧标注 generation 中，当前 episode 输出文件会保存为 partial checkpoint：
+
+```text
+outputs/episode_0001/generation/episode_0001_generation.json
+```
+
+其中包含：
+
+```text
+status            interrupted 或 failed
+expected_count    当前 episode 原计划 generation 请求数
+processed_count   已成功完成的请求数
+current_request   中断时正在处理的 request_index / stage_idx / frame_number / image_path
+error             异常类型、错误消息、是否键盘中断、traceback
+results           已完成的 model_response 标注结果
+```
+
+批量运行时，聚合文件也会保存当前进度：
+
+```text
+outputs/generation/generation_results.json
+```
+
+`--resume` 只会跳过 `status=complete` 且 `processed_count == expected_count` 的完整 episode。`status=interrupted` 或 `status=failed` 的 partial 文件不会被当作完成结果跳过；再次运行时会重新生成该 episode。
+
 ## 一步运行 prior + generation
 
 单条数据可直接运行：

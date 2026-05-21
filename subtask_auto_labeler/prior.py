@@ -3,6 +3,7 @@ import time
 from pathlib import Path
 from typing import List, Optional
 
+from .checkpoint import checkpoint_status, error_to_json, save_checkpoint
 from .dataset import EpisodeData, SkillSpec, load_episode, sample_subtask_images
 from .gemini_client import GeminiClient
 from .io_utils import JsonObject, write_json
@@ -116,28 +117,49 @@ def run_prior_pipeline(
 
     subtask_dir = output_dir / "subtasks"
     subtask_results: List[JsonObject] = []
-    for skill in episode.skills:
-        result = run_subtask_prior(
+    current_skill: Optional[SkillSpec] = None
+    try:
+        for skill in episode.skills:
+            current_skill = skill
+            result = run_subtask_prior(
+                episode=episode,
+                skill=skill,
+                output_path=subtask_dir / f"subtask_{skill.stage_idx:02d}_prior.json",
+                prompt_catalog=prompt_catalog,
+                gemini_client=gemini_client,
+                k=k,
+                prior_frame_stride=prior_frame_stride,
+                prior_min_items=prior_min_items,
+                request_delay=request_delay,
+            )
+            subtask_results.append(result)
+
+        current_skill = None
+        parent = run_parent_prior(
             episode=episode,
-            skill=skill,
-            output_path=subtask_dir / f"subtask_{skill.stage_idx:02d}_prior.json",
+            subtask_results=subtask_results,
+            output_path=output_dir / "task_prior.json",
             prompt_catalog=prompt_catalog,
             gemini_client=gemini_client,
+            prior_min_items=prior_min_items,
+        )
+    except BaseException as exc:
+        checkpoint = build_prior_pipeline_checkpoint(
+            annotation_json=annotation_json,
+            image_root=image_root,
+            output_dir=output_dir,
+            episode=episode,
+            subtask_results=subtask_results,
             k=k,
             prior_frame_stride=prior_frame_stride,
             prior_min_items=prior_min_items,
-            request_delay=request_delay,
+            status=checkpoint_status(exc),
+            error=error_to_json(exc),
+            current_skill=current_skill,
         )
-        subtask_results.append(result)
+        save_checkpoint(output_dir / "prior_checkpoint.json", checkpoint)
+        raise
 
-    parent = run_parent_prior(
-        episode=episode,
-        subtask_results=subtask_results,
-        output_path=output_dir / "task_prior.json",
-        prompt_catalog=prompt_catalog,
-        gemini_client=gemini_client,
-        prior_min_items=prior_min_items,
-    )
     prompt_info_path = output_dir / "autolabel_prompt_info.json"
     write_json(prompt_info_path, parent)
     print(f"[saved] {prompt_info_path}", flush=True)
@@ -152,6 +174,7 @@ def run_prior_pipeline(
         "subtask_prior_paths": [str(subtask_dir / f"subtask_{skill.stage_idx:02d}_prior.json") for skill in episode.skills],
         "task_prior_path": str(output_dir / "task_prior.json"),
         "prompt_info_path": str(prompt_info_path),
+        "status": "complete",
         "task_prior": parent,
     }
 
@@ -171,87 +194,200 @@ def run_subtask_prior(
     samples = sample_subtask_images(episode.image_root, skill, k, frame_stride=prior_frame_stride)
     frame_results: List[JsonObject] = []
     system_instruction = prompt_catalog.get("subtask_prior_system")
-    for request_index, sample in enumerate(samples, start=1):
-        previous_record = frame_results[-1] if frame_results else None
-        previous_context = (
-            json.dumps(
-                {
-                    "previous_frame_number": previous_record["frame_number"],
-                    "previous_model_response": previous_record["model_response"],
-                },
-                ensure_ascii=False,
-                indent=2,
+    current_request: Optional[JsonObject] = None
+    subtask_prior: Optional[JsonObject] = None
+    try:
+        for request_index, sample in enumerate(samples, start=1):
+            current_request = {
+                "phase": "subtask_frame_prior",
+                "stage_idx": skill.stage_idx,
+                "skill_idx": skill.skill_idx,
+                "request_index": request_index,
+                "total_requests": len(samples),
+                "frame_number": sample.frame_number,
+                "image_path": str(sample.image_path),
+            }
+            previous_record = frame_results[-1] if frame_results else None
+            previous_context = (
+                json.dumps(
+                    {
+                        "previous_frame_number": previous_record["frame_number"],
+                        "previous_model_response": previous_record["model_response"],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                if previous_record is not None
+                else "No previous sampled frame for this skill."
             )
-            if previous_record is not None
-            else "No previous sampled frame for this skill."
-        )
-        prompt_values = {
-            "task_name": episode.task_name,
-            "stage_idx": skill.stage_idx,
-            "skill_idx": skill.skill_idx,
-            "skill_description": skill.skill_description,
-            "object_id": skill.object_id,
-            "manuipation_object_id": skill.manuipation_object_id,
-            "frame_duration": list(skill.frame_duration),
-            "frame_number": sample.frame_number,
-            "sample_index": request_index,
-            "sample_count": len(samples),
-            "prior_min_items": prior_min_items,
-            "previous_frame_context": previous_context,
-            "universal_visual_rubric": prompt_catalog.render_optional("universal_visual_rubric", {}),
-            "action_primitive_rubric": prompt_catalog.render_optional("action_primitive_rubric", {}),
-        }
-        prompt = append_optional_prompt(
-            prompt_catalog.render("subtask_prior_user", prompt_values),
-            prompt_catalog.render_optional("target_consistency_rules", prompt_values),
-        )
-        image_paths = [sample.image_path]
-        if previous_record is not None:
-            image_paths = [Path(previous_record["image_path"]), sample.image_path]
-        print(
-            "[prior-subtask-frame] "
-            f"stage_idx={skill.stage_idx} sample={request_index}/{len(samples)} "
-            f"frame={sample.frame_number} image={sample.image_path}",
-            flush=True,
-        )
-        response, metadata = gemini_client.generate_json(
-            system_instruction=system_instruction,
-            prompt=prompt,
-            image_paths=image_paths,
-            required_keys=SUBTASK_FRAME_KEYS,
-        )
-        response = sanitize_visual_guidance(response)
-        frame_record: JsonObject = {
-            "request_index": request_index,
-            "frame_number": sample.frame_number,
-            "image_path": str(sample.image_path),
-            "image_index_in_stage": sample.image_index_in_stage,
-            "model_response": response,
-        }
-        if previous_record is not None:
-            frame_record["previous_image_path"] = previous_record["image_path"]
-            frame_record["previous_frame_number"] = previous_record["frame_number"]
-        if metadata:
-            frame_record["google_response_metadata"] = metadata
-        frame_results.append(frame_record)
-        if request_delay > 0 and request_index < len(samples):
-            time.sleep(request_delay)
+            prompt_values = {
+                "task_name": episode.task_name,
+                "stage_idx": skill.stage_idx,
+                "skill_idx": skill.skill_idx,
+                "skill_description": skill.skill_description,
+                "object_id": skill.object_id,
+                "manuipation_object_id": skill.manuipation_object_id,
+                "frame_duration": list(skill.frame_duration),
+                "frame_number": sample.frame_number,
+                "sample_index": request_index,
+                "sample_count": len(samples),
+                "prior_min_items": prior_min_items,
+                "previous_frame_context": previous_context,
+                "universal_visual_rubric": prompt_catalog.render_optional("universal_visual_rubric", {}),
+                "action_primitive_rubric": prompt_catalog.render_optional("action_primitive_rubric", {}),
+            }
+            prompt = append_optional_prompt(
+                prompt_catalog.render("subtask_prior_user", prompt_values),
+                prompt_catalog.render_optional("target_consistency_rules", prompt_values),
+            )
+            image_paths = [sample.image_path]
+            if previous_record is not None:
+                image_paths = [Path(previous_record["image_path"]), sample.image_path]
+            print(
+                "[prior-subtask-frame] "
+                f"stage_idx={skill.stage_idx} sample={request_index}/{len(samples)} "
+                f"frame={sample.frame_number} image={sample.image_path}",
+                flush=True,
+            )
+            response, metadata = gemini_client.generate_json(
+                system_instruction=system_instruction,
+                prompt=prompt,
+                image_paths=image_paths,
+                required_keys=SUBTASK_FRAME_KEYS,
+            )
+            response = sanitize_visual_guidance(response)
+            frame_record: JsonObject = {
+                "request_index": request_index,
+                "frame_number": sample.frame_number,
+                "image_path": str(sample.image_path),
+                "image_index_in_stage": sample.image_index_in_stage,
+                "model_response": response,
+            }
+            if previous_record is not None:
+                frame_record["previous_image_path"] = previous_record["image_path"]
+                frame_record["previous_frame_number"] = previous_record["frame_number"]
+            if metadata:
+                frame_record["google_response_metadata"] = metadata
+            frame_results.append(frame_record)
+            if request_delay > 0 and request_index < len(samples):
+                time.sleep(request_delay)
 
+        current_request = {"phase": "subtask_summary_prior", "stage_idx": skill.stage_idx, "skill_idx": skill.skill_idx}
+        subtask_prior = build_subtask_checkpoint_payload(
+            episode=episode,
+            skill=skill,
+            frame_results=frame_results,
+            expected_sample_count=len(samples),
+            k=k,
+            prior_frame_stride=prior_frame_stride,
+            prior_min_items=prior_min_items,
+            status="frame_prior_complete",
+        )
+        subtask_prior = consolidate_subtask_prior(
+            episode=episode,
+            skill=skill,
+            preliminary_prior=subtask_prior,
+            prompt_catalog=prompt_catalog,
+            gemini_client=gemini_client,
+            prior_min_items=prior_min_items,
+        )
+    except BaseException as exc:
+        checkpoint_payload = subtask_prior or build_subtask_checkpoint_payload(
+            episode=episode,
+            skill=skill,
+            frame_results=frame_results,
+            expected_sample_count=len(samples),
+            k=k,
+            prior_frame_stride=prior_frame_stride,
+            prior_min_items=prior_min_items,
+            status=checkpoint_status(exc),
+            current_request=current_request,
+            error=error_to_json(exc),
+        )
+        if subtask_prior is not None:
+            checkpoint_payload["status"] = checkpoint_status(exc)
+            checkpoint_payload["current_request"] = current_request
+            checkpoint_payload["error"] = error_to_json(exc)
+        save_checkpoint(output_path, checkpoint_payload)
+        raise
+
+    subtask_prior["status"] = "complete"
+    write_json(output_path, subtask_prior)
+    print(f"[saved] {output_path}", flush=True)
+    return subtask_prior
+
+
+def build_prior_pipeline_checkpoint(
+    *,
+    annotation_json: Path,
+    image_root: Path,
+    output_dir: Path,
+    episode: EpisodeData,
+    subtask_results: List[JsonObject],
+    k: int,
+    prior_frame_stride: Optional[int],
+    prior_min_items: int,
+    status: str,
+    error: JsonObject,
+    current_skill: Optional[SkillSpec],
+) -> JsonObject:
+    checkpoint: JsonObject = {
+        "status": status,
+        "annotation_json": str(annotation_json),
+        "image_root": str(image_root),
+        "output_dir": str(output_dir),
+        "task_name": episode.task_name,
+        "expected_subtask_count": len(episode.skills),
+        "subtask_count": len(subtask_results),
+        "sample_k": k,
+        "prior_frame_stride": prior_frame_stride,
+        "prior_min_items": prior_min_items,
+        "subtask_prior_paths": [
+            str(output_dir / "subtasks" / f"subtask_{skill.stage_idx:02d}_prior.json")
+            for skill in episode.skills
+        ],
+        "task_prior_path": str(output_dir / "task_prior.json"),
+        "prompt_info_path": str(output_dir / "autolabel_prompt_info.json"),
+        "subtask_priors": subtask_results,
+        "error": error,
+    }
+    if current_skill is not None:
+        checkpoint["current_skill"] = {
+            "stage_idx": current_skill.stage_idx,
+            "skill_idx": current_skill.skill_idx,
+            "skill_description": current_skill.skill_description,
+            "frame_duration": list(current_skill.frame_duration),
+        }
+    else:
+        checkpoint["current_phase"] = "parent_prior"
+    return checkpoint
+
+
+def build_subtask_checkpoint_payload(
+    *,
+    episode: EpisodeData,
+    skill: SkillSpec,
+    frame_results: List[JsonObject],
+    expected_sample_count: int,
+    k: int,
+    prior_frame_stride: Optional[int],
+    prior_min_items: int,
+    status: str,
+    current_request: Optional[JsonObject] = None,
+    error: Optional[JsonObject] = None,
+) -> JsonObject:
     subtask_prior = summarize_subtask_prior(episode, skill, frame_results)
+    subtask_prior["status"] = status
     subtask_prior["sampling_strategy"] = "frame_stride" if prior_frame_stride is not None else "uniform_k"
     subtask_prior["sample_k"] = k
     subtask_prior["prior_frame_stride"] = prior_frame_stride
     subtask_prior["prior_min_items"] = prior_min_items
-    subtask_prior = consolidate_subtask_prior(
-        episode=episode,
-        skill=skill,
-        preliminary_prior=subtask_prior,
-        prompt_catalog=prompt_catalog,
-        gemini_client=gemini_client,
-        prior_min_items=prior_min_items,
-    )
-    write_json(output_path, subtask_prior)
-    print(f"[saved] {output_path}", flush=True)
+    subtask_prior["expected_sample_count"] = expected_sample_count
+    subtask_prior["processed_sample_count"] = len(frame_results)
+    if current_request is not None:
+        subtask_prior["current_request"] = current_request
+    if error is not None:
+        subtask_prior["error"] = error
     return subtask_prior
 
 
@@ -425,14 +561,31 @@ def run_parent_prior(
         prompt_catalog.render_optional("target_consistency_rules", prompt_values),
     )
     print("[prior-parent] reviewing child priors", flush=True)
-    response, metadata = gemini_client.generate_json(
-        system_instruction=system_instruction,
-        prompt=prompt,
-        required_keys=PARENT_PRIOR_KEYS,
-    )
+    try:
+        response, metadata = gemini_client.generate_json(
+            system_instruction=system_instruction,
+            prompt=prompt,
+            required_keys=PARENT_PRIOR_KEYS,
+        )
+    except BaseException as exc:
+        parent_checkpoint: JsonObject = {
+            "status": checkpoint_status(exc),
+            "agent_type": "parent_review_agent",
+            "task_name": episode.task_name,
+            "annotation_json": str(episode.annotation_json),
+            "image_root": str(episode.image_root),
+            "prior_min_items": prior_min_items,
+            "current_request": {"phase": "parent_prior"},
+            "error": error_to_json(exc),
+            "subtask_prior_count": len(subtask_results),
+            "subtask_priors": subtask_results,
+        }
+        save_checkpoint(output_path, parent_checkpoint)
+        raise
     response = normalize_parent_prior_response(response)
     response = merge_parent_response_with_child_priors(response, subtask_results)
     parent_prior: JsonObject = {
+        "status": "complete",
         "agent_type": "parent_review_agent",
         "task_name": episode.task_name,
         "annotation_json": str(episode.annotation_json),
