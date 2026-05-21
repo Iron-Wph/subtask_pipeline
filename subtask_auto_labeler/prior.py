@@ -76,6 +76,22 @@ PARENT_REVIEW_LIST_FIELDS = {
     "additional_ambiguous_cases",
     "cross_skill_risks",
 }
+CHILD_PRIOR_SNAPSHOT_KEYS = (
+    "skill_type_hypothesis",
+    "target_binding",
+    "target_visual_description",
+    "pre_completion_state",
+    "in_progress_state",
+    "completion_gates",
+    "completion_conditions",
+    "required_visual_evidence",
+    "state_transition_evidence",
+    "negative_conditions",
+    "not_sufficient_for_completion",
+    "common_false_positives",
+    "ambiguous_cases",
+    "generation_prompt_guidance",
+)
 
 
 def run_prior_pipeline(
@@ -511,6 +527,13 @@ def build_parent_review_skill(parent_skill: JsonObject, child_prior: JsonObject)
             value = parent_value if has_prompt_value(parent_value) else child_value
         if has_prompt_value(value):
             merged[key] = value
+    child_snapshot = {
+        key: child_prior.get(key)
+        for key in CHILD_PRIOR_SNAPSHOT_KEYS
+        if has_prompt_value(child_prior.get(key))
+    }
+    if child_snapshot:
+        merged["child_prior_snapshot"] = child_snapshot
     return sanitize_visual_guidance(merged)
 
 

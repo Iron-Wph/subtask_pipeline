@@ -144,7 +144,7 @@ Prompt information structure for each skill:
 }
 ```
 
-These structured fields store the child agent's visual criteria. `generation_prompt_guidance` is the child agent's main natural-language Rule 16 guidance after sampled-frame consolidation; it is not a raw key/value dump. The parent agent acts as a reviewer and QA annotator only; parent review fields are saved for inspection and are not injected into frame-level generation prompts. Generic memory format, output JSON format, actor naming, and status rules still come from the shared `generate_dataset.py` prompt.
+These structured fields store the child agent's visual criteria. `generation_prompt_guidance` is the child agent's main natural-language Rule 16 guidance after sampled-frame consolidation; it is not a raw key/value dump. The parent agent acts as a reviewer and QA annotator only; parent review fields are saved for inspection and are not injected into frame-level generation prompts. To avoid information loss when inspecting `model_response.skills`, each parent review skill also includes a `child_prior_snapshot` copied from the child prior with the key completion, negative, no_for_sure, false-positive, and guidance fields. Generic memory format, output JSON format, actor naming, and status rules still come from the shared `generate_dataset.py` prompt.
 
 Prior generation uses three levels of constraints: `universal_visual_rubric` defines direct visible evidence and target consistency; `action_primitive_rubric` defines generic robot action primitives such as move, pick, place, press, and open/close; `prior_review_rubric` asks the parent agent to audit weak child-agent criteria and false-positive risks for offline review. Large-scale generation does not load these generic rubrics directly; it loads only the child `generation_prompt_guidance` and child structured guardrails for the current skill.
 
@@ -243,6 +243,8 @@ generation_prompt_guidance      Main natural-language Rule 16 guidance generated
 ```
 
 Generation does not paste the full `autolabel_prompt_info.json` into Gemini, and it does not paste raw structured key/value JSON into the prompt. The flow is now: the child agent generates the main `generation_prompt_guidance`; the parent agent returns QA review fields that are saved in JSON but not used as generation-time rules.
+
+Parent review output should not be used directly as Rule 16 guidance. It is intentionally an audit record. The detailed generation criteria remain in `subtask_priors` and are mirrored under each parent review item's `child_prior_snapshot`.
 
 Generation reads the child `generation_prompt_guidance`, then appends `pre_completion_state`, `in_progress_state`, `completion_gates`, and `not_sufficient_for_completion` as child structured guardrails. If an old prior file lacks child `generation_prompt_guidance`, the code falls back to rendering natural guidance from the child structured fields.
 
