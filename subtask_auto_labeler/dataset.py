@@ -247,16 +247,51 @@ def sample_uniform_internal_frames(
     return [candidates[idx] for idx in sorted(indices)]
 
 
-def sample_subtask_images(image_root: Path, skill: SkillSpec, k: int) -> List[SampledFrame]:
+def sample_stride_internal_frames(
+    frame_duration: Tuple[int, int],
+    available_frame_numbers: Sequence[int],
+    frame_stride: int,
+) -> List[int]:
+    if frame_stride < 1:
+        raise ValueError("frame_stride must be >= 1")
+    start_frame, end_frame = frame_duration
+    candidates = sorted(frame for frame in available_frame_numbers if start_frame < frame < end_frame)
+    if not candidates:
+        raise FileNotFoundError(
+            f"No available internal frames for duration {list(frame_duration)}. "
+            "Sampling excludes both boundary frames."
+        )
+
+    samples: List[int] = []
+    candidate_index = 0
+    next_target = candidates[0]
+    while candidate_index < len(candidates):
+        while candidate_index < len(candidates) and candidates[candidate_index] < next_target:
+            candidate_index += 1
+        if candidate_index >= len(candidates):
+            break
+        frame_number = candidates[candidate_index]
+        samples.append(frame_number)
+        next_target = frame_number + frame_stride
+        candidate_index += 1
+    return samples
+
+
+def sample_subtask_images(
+    image_root: Path,
+    skill: SkillSpec,
+    k: int,
+    frame_stride: Optional[int] = None,
+) -> List[SampledFrame]:
     images = find_stage_images(image_root, skill.stage_idx)
     frame_image_map = build_frame_image_map(images)
     if not frame_image_map:
         raise FileNotFoundError(f"No frame_000123-style images found in {images[0].parent}")
-    sampled_frames = sample_uniform_internal_frames(
-        skill.frame_duration,
-        sorted(frame_image_map.keys()),
-        k,
-    )
+    available_frame_numbers = sorted(frame_image_map.keys())
+    if frame_stride is not None:
+        sampled_frames = sample_stride_internal_frames(skill.frame_duration, available_frame_numbers, frame_stride)
+    else:
+        sampled_frames = sample_uniform_internal_frames(skill.frame_duration, available_frame_numbers, k)
     samples: List[SampledFrame] = []
     for frame_number in sampled_frames:
         image_path = frame_image_map[frame_number]

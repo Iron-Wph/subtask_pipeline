@@ -36,6 +36,11 @@ def build_parser() -> argparse.ArgumentParser:
     prior.add_argument("-o", "--output-dir", type=Path, required=True)
     prior.add_argument("-k", "--sample-k", type=int, default=10)
     prior.add_argument(
+        "--prior-frame-stride",
+        type=int,
+        help="Sample prior frames every N frames inside each skill range. Overrides --sample-k when set.",
+    )
+    prior.add_argument(
         "--prior-min-items",
         type=int,
         default=DEFAULT_PRIOR_MIN_ITEMS,
@@ -80,6 +85,11 @@ def build_parser() -> argparse.ArgumentParser:
     run_all.add_argument("--image-root", type=Path, required=True)
     run_all.add_argument("-o", "--output-dir", type=Path, required=True)
     run_all.add_argument("-k", "--sample-k", type=int, default=10)
+    run_all.add_argument(
+        "--prior-frame-stride",
+        type=int,
+        help="Sample prior frames every N frames inside each skill range. Overrides --sample-k when set.",
+    )
     run_all.add_argument(
         "--prior-min-items",
         type=int,
@@ -130,6 +140,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             prompt_catalog=prompt_catalog,
             gemini_client=client,
             k=args.sample_k,
+            prior_frame_stride=args.prior_frame_stride,
             prior_min_items=args.prior_min_items,
             request_delay=args.request_delay,
         )
@@ -164,6 +175,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             prompt_catalog=prompt_catalog,
             gemini_client=client,
             k=args.sample_k,
+            prior_frame_stride=args.prior_frame_stride,
             prior_min_items=args.prior_min_items,
             request_delay=args.request_delay,
         )

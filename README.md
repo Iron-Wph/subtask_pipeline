@@ -79,6 +79,8 @@ manuipation_object_id 或 manipulating_object_id
 
 Each skill first produces frame-level prior candidates, then the child-summary agent consolidates them. List fields default to at least 4 non-duplicate items and can be controlled with `--prior-min-items`. The relevant list fields include `pre_completion_state`, `in_progress_state`, `completion_gates`, `completion_conditions`, `required_visual_evidence`, `state_transition_evidence`, `negative_conditions`, `not_sufficient_for_completion`, `common_false_positives`, and `ambiguous_cases`.
 
+By default, prior sampling uses `--sample-k 10` and samples uniformly inside each skill's `frame_duration`, excluding the boundary frames. For denser temporal evidence, use `--prior-frame-stride 30`; this samples every 30 frames inside each skill range and overrides `--sample-k` for prior generation. Dense prior sampling is useful for short state-change moments where a fixed `k` can miss pre-contact, occlusion, and post-state evidence.
+
 prior 阶段不是直接生成最终逐帧标签，但每个采样帧会保存轻量状态记忆：`frame_reasoning` 和 `frame_state_memory`。其中 `frame_state_memory` 记录目标部件当前状态、机器人与目标部件的空间/接触关系、相对上一采样帧的变化和不确定性。后续汇总时会用这些帧级状态信息生成更稳定的完成条件。
 
 ```bash
@@ -87,6 +89,7 @@ python api_subtask_auto_label.py prior \
   --image-root data/images/episode_0001 \
   --output-dir outputs/episode_0001/prior \
   --sample-k 10 \
+  --prior-frame-stride 30 \
   --prior-min-items 4
 ```
 

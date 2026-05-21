@@ -1,7 +1,7 @@
 import json
 import time
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from .dataset import EpisodeData, SkillSpec, load_episode, sample_subtask_images
 from .gemini_client import GeminiClient
@@ -86,11 +86,14 @@ def run_prior_pipeline(
     prompt_catalog: PromptCatalog,
     gemini_client: GeminiClient,
     k: int = 10,
+    prior_frame_stride: Optional[int] = None,
     prior_min_items: int = DEFAULT_PRIOR_MIN_ITEMS,
     request_delay: float = 0.0,
 ) -> JsonObject:
     if prior_min_items < 1:
         raise ValueError("prior_min_items must be at least 1.")
+    if prior_frame_stride is not None and prior_frame_stride < 1:
+        raise ValueError("prior_frame_stride must be >= 1.")
     episode = load_episode(annotation_json, image_root)
     if not episode.task_name:
         raise ValueError("Annotation JSON must provide task_name, main_task, or task_description.")
@@ -105,6 +108,7 @@ def run_prior_pipeline(
             prompt_catalog=prompt_catalog,
             gemini_client=gemini_client,
             k=k,
+            prior_frame_stride=prior_frame_stride,
             prior_min_items=prior_min_items,
             request_delay=request_delay,
         )
@@ -126,6 +130,8 @@ def run_prior_pipeline(
         "image_root": str(image_root),
         "output_dir": str(output_dir),
         "subtask_count": len(subtask_results),
+        "sample_k": k,
+        "prior_frame_stride": prior_frame_stride,
         "prior_min_items": prior_min_items,
         "subtask_prior_paths": [str(subtask_dir / f"subtask_{skill.stage_idx:02d}_prior.json") for skill in episode.skills],
         "task_prior_path": str(output_dir / "task_prior.json"),
@@ -142,10 +148,11 @@ def run_subtask_prior(
     prompt_catalog: PromptCatalog,
     gemini_client: GeminiClient,
     k: int,
+    prior_frame_stride: Optional[int],
     prior_min_items: int,
     request_delay: float,
 ) -> JsonObject:
-    samples = sample_subtask_images(episode.image_root, skill, k)
+    samples = sample_subtask_images(episode.image_root, skill, k, frame_stride=prior_frame_stride)
     frame_results: List[JsonObject] = []
     system_instruction = prompt_catalog.get("subtask_prior_system")
     for request_index, sample in enumerate(samples, start=1):
@@ -215,6 +222,9 @@ def run_subtask_prior(
             time.sleep(request_delay)
 
     subtask_prior = summarize_subtask_prior(episode, skill, frame_results)
+    subtask_prior["sampling_strategy"] = "frame_stride" if prior_frame_stride is not None else "uniform_k"
+    subtask_prior["sample_k"] = k
+    subtask_prior["prior_frame_stride"] = prior_frame_stride
     subtask_prior["prior_min_items"] = prior_min_items
     subtask_prior = consolidate_subtask_prior(
         episode=episode,

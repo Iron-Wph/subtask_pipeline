@@ -491,7 +491,13 @@ def build_completion_guidance(global_prompt_info: JsonObject, subtask_prior: Jso
     lines.append("")
     lines.append(
         "Treat these task-specific rules as judging criteria, not as visual evidence; "
-        "the current image and the previous memory still decide the label."
+        "the current image and the previous memory still decide the label. "
+        "Mark the candidate skill completed only when every decisive completion gate is directly visible "
+        "in the current image. If the current image still matches a before-completion state, an in-progress "
+        "state, or an insufficient-progress pattern, do not mark completed. If the decisive result state is "
+        "occluded, color-ambiguous, hidden by the robot, or not directly visible, use no_for_sure instead of "
+        "completed. Contact, hovering, pressing motion, support, or gripper movement cannot substitute for "
+        "the required visible result state."
     )
     return "\n".join(lines)
 
@@ -499,10 +505,22 @@ def build_completion_guidance(global_prompt_info: JsonObject, subtask_prior: Jso
 def render_child_structured_guardrails(child_prior: JsonObject) -> str:
     lines: List[str] = []
     for value, label in (
-        (child_prior.get("pre_completion_state"), "Visible states before completion"),
-        (child_prior.get("in_progress_state"), "Visible in-progress states that are not completed"),
-        (child_prior.get("completion_gates"), "Decisive completion gates"),
-        (child_prior.get("not_sufficient_for_completion"), "Insufficient progress patterns"),
+        (
+            child_prior.get("pre_completion_state"),
+            "Visible states before completion; if the current image matches any of these, do not mark completed",
+        ),
+        (
+            child_prior.get("in_progress_state"),
+            "Visible in-progress states that are not completed",
+        ),
+        (
+            child_prior.get("completion_gates"),
+            "Decisive completion gates; all must be directly visible as AND conditions before completed is allowed",
+        ),
+        (
+            child_prior.get("not_sufficient_for_completion"),
+            "Insufficient progress patterns; these must stay in_progress or no_for_sure, not completed",
+        ),
     ):
         items = normalize_guidance_items(value)
         if items:
