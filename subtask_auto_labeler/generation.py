@@ -47,6 +47,7 @@ SKILL_PRIOR_KEYS = (
     "ambiguous_cases",
     "generation_prompt_guidance",
 )
+COMPLETED_STATUSES = {"completed", "completed_and_transitioning"}
 
 
 def run_generation_pipeline(
@@ -162,6 +163,10 @@ def run_episode_generation(
             "No generation frames were selected. Check that --image-root points to the frame directory "
             "containing stage_00/frame_000123.jpg files and that frame numbers overlap annotation durations."
         )
+    last_request_index_by_stage: Dict[int, int] = {}
+    for sample_index, (sampled_skill, _) in enumerate(sampled, start=1):
+        last_request_index_by_stage[sampled_skill.stage_idx] = sample_index
+
     old_memory = ""
     previous_image_path: Optional[Path] = None
     records: List[JsonObject] = []
@@ -178,6 +183,12 @@ def run_episode_generation(
         subtask_prior = subtask_prior_by_stage.get(skill.stage_idx, {})
         has_previous_image = include_previous_image and previous_image_path is not None
         completion_guidance = build_completion_guidance(global_prompt_info, subtask_prior)
+        completion_gate_context = build_completion_gate_context(
+            skill=skill,
+            subtask_prior=subtask_prior,
+            request_index=request_index,
+            last_request_index=last_request_index_by_stage.get(skill.stage_idx),
+        )
         prompt_values = {
             "task_name": episode.task_name,
             "old_memory": old_memory,
@@ -187,7 +198,7 @@ def run_episode_generation(
             "frame_duration": list(skill.frame_duration),
             "frame_number": sample.frame_number,
             "image_block": build_image_block(has_previous_image),
-            "completion_gate_context": "No extra completion gate.",
+            "completion_gate_context": completion_gate_context,
             "completion_guidance": completion_guidance,
         }
         prompt = prompt_catalog.render("generation_user", prompt_values)
@@ -239,9 +250,18 @@ def run_episode_generation(
             "frame_number": sample.frame_number,
             "frame_duration": list(skill.frame_duration),
             "completion_guidance": completion_guidance,
+            "completion_gate_context": completion_gate_context,
         }
         if has_previous_image and previous_image_path is not None:
             request_input["previous_image_path"] = str(previous_image_path)
+        model_response = normalize_model_response(response)
+        hard_completion_gate = apply_hard_completion_gates(
+            response=model_response,
+            skill=skill,
+            subtask_prior=subtask_prior,
+            request_index=request_index,
+            last_request_index=last_request_index_by_stage.get(skill.stage_idx),
+        )
         record: JsonObject = {
             "skill_idx": skill.skill_idx,
             "stage_idx": skill.stage_idx,
@@ -256,9 +276,11 @@ def run_episode_generation(
             "object_id": skill.skill.get("object_id", ""),
             "manuipation_object_id": skill.manuipation_object_id,
             "request_input": request_input,
-            "model_response": normalize_model_response(response),
+            "model_response": model_response,
             "result_used": True,
         }
+        if hard_completion_gate:
+            record["hard_completion_gate"] = hard_completion_gate
         if metadata:
             record["google_response_metadata"] = metadata
         if rendered_prompt_path is not None:
@@ -266,7 +288,7 @@ def run_episode_generation(
             record["rendered_prompt_markdown_path"] = str(rendered_prompt_path.with_suffix(".md"))
         records.append(record)
 
-        new_memory = response.get("new_memory")
+        new_memory = model_response.get("new_memory")
         if new_memory:
             old_memory = new_memory if isinstance(new_memory, str) else json.dumps(new_memory, ensure_ascii=False)
         previous_image_path = sample.image_path
@@ -300,6 +322,118 @@ def normalize_model_response(response: JsonObject) -> JsonObject:
         if normalized == "no_for_sure":
             response["is_subtask_completed"] = False
     return response
+
+
+def build_completion_gate_context(
+    *,
+    skill: SkillSpec,
+    subtask_prior: JsonObject,
+    request_index: int,
+    last_request_index: Optional[int],
+) -> str:
+    if not is_move_to_skill(skill, subtask_prior):
+        return "No extra completion gate."
+    if last_request_index is None:
+        return "No extra completion gate."
+    if request_index < last_request_index:
+        return (
+            "Hard output constraint for move-to or navigation skills: this is not the final sampled "
+            "request for the current move-to skill. Do not set current_skill_status to completed or "
+            "completed_and_transitioning, and set is_subtask_completed to false. Use in_progress when "
+            "the robot is visibly approaching or settling near the target. Use no_for_sure when the "
+            "settled target interaction pose or immediate reachability is unclear."
+        )
+    return (
+        "Hard output constraint for move-to or navigation skills: this is the final sampled request "
+        "for the current move-to skill, so completion is allowed only if the current image directly "
+        "shows the robot settled at the target interaction pose and the target is within immediate "
+        "working distance. If that direct evidence is missing or ambiguous, do not mark completed."
+    )
+
+
+def apply_hard_completion_gates(
+    *,
+    response: JsonObject,
+    skill: SkillSpec,
+    subtask_prior: JsonObject,
+    request_index: int,
+    last_request_index: Optional[int],
+) -> Optional[JsonObject]:
+    if not is_move_to_skill(skill, subtask_prior):
+        return None
+    if last_request_index is None or request_index >= last_request_index:
+        return None
+    original_status = response.get("current_skill_status")
+    if original_status not in COMPLETED_STATUSES:
+        return None
+
+    target_name = get_candidate_subtask_name(skill, subtask_prior)
+    response["current_skill_status"] = "in_progress"
+    response["is_subtask_completed"] = False
+    response["visible_transition"] = ""
+    response["new_memory"] = build_move_to_hard_gate_memory(response, target_name)
+    return {
+        "rule": "move_to_completion_only_allowed_on_last_request",
+        "reason": (
+            "Move-to or navigation skills may only output completed on the last sampled request "
+            "for that skill."
+        ),
+        "original_current_skill_status": original_status,
+        "forced_current_skill_status": "in_progress",
+        "request_index": request_index,
+        "last_request_index_for_stage": last_request_index,
+    }
+
+
+def build_move_to_hard_gate_memory(response: JsonObject, target_name: str) -> JsonObject:
+    world_state = ""
+    existing_memory = response.get("new_memory")
+    if isinstance(existing_memory, dict):
+        world_state = str(existing_memory.get("World state", "")).strip()
+    if not world_state:
+        world_state = (
+            "The robot is near the target area, but the settled interaction pose and immediate "
+            "reachability are being judged conservatively."
+        )
+    return {
+        "Progress": (
+            f"The robot is still moving toward or settling near {target_name}. "
+            "The move-to subtask is not recorded as completed yet."
+        ),
+        "World state": world_state,
+    }
+
+
+def is_move_to_skill(skill: SkillSpec, subtask_prior: JsonObject) -> bool:
+    child_prior = subtask_prior.get("child_prior")
+    child = child_prior if isinstance(child_prior, dict) else {}
+    candidates = [
+        skill.skill_description,
+        skill.skill.get("skill_description"),
+        child.get("skill_description"),
+        child.get("skill_type_hypothesis"),
+        child.get("subtask_name"),
+    ]
+    text = " ".join(normalize_action_text(value) for value in candidates)
+    return any(pattern in text for pattern in ("move to", "navigate to", "go to"))
+
+
+def normalize_action_text(value: object) -> str:
+    normalized = normalize_skill_label(value).lower()
+    return normalized.replace("_", " ").replace("-", " ")
+
+
+def get_candidate_subtask_name(skill: SkillSpec, subtask_prior: JsonObject) -> str:
+    child_prior = subtask_prior.get("child_prior")
+    child = child_prior if isinstance(child_prior, dict) else {}
+    return first_text_value(
+        [
+            child.get("subtask_name"),
+            skill.skill.get("subtask_name"),
+            normalize_skill_label(skill.skill_description),
+            "the target interaction pose",
+        ]
+    )
 
 
 def get_rendered_prompt_output_dir(output_path: Path) -> Path:

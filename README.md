@@ -261,6 +261,37 @@ Child-agent structured visual state guardrails:
   and child_prior.not_sufficient_for_completion.
 ```
 
+### 通用硬性完成规则
+
+除了 child-agent 生成的可见判据，`generation.py` 还会在逐帧 generation 阶段加入少量跨任务通用硬规则。目前内置规则如下：
+
+```text
+move-to / navigation skill:
+  同一个 move-to skill 的非最后一次采样请求不允许输出 completed 或 completed_and_transitioning。
+  即使当前图像看起来已经接近目标，也只能输出 in_progress 或 no_for_sure。
+  只有该 skill 的最后一次采样请求才允许输出 completed，
+  并且仍然必须满足当前图像中直接可见的稳定交互位姿和目标可达性证据。
+```
+
+这条规则的目的，是避免 move-to skill 在中间帧过早写入完成状态，影响后续 memory 和 skill 边界判断。它对所有任务通用，不依赖具体物体类别或 task 名称。
+
+实现位置：
+
+```text
+subtask_auto_labeler/generation.py
+  build_completion_gate_context()
+    把通用硬规则写入每次请求的 Completion gate context。
+
+  apply_hard_completion_gates()
+    如果模型仍然在非最后一次 move-to 请求中输出 completed，
+    程序会确定性改回 in_progress，并把 is_subtask_completed 改为 false。
+
+  is_move_to_skill()
+    判断当前 skill 是否属于 move-to / navigation 类动作。
+```
+
+如果后续需要增加类似的通用硬规则，例如 pick-up 必须看到离开支撑面、place 必须看到释放并稳定接触目标位置，优先在这三个函数附近扩展，不要写进某个具体 task 的 `generation_prompt_guidance`。
+
 `--frame-stride` 会复用旧 `api_gemini_without_wrist.py` 的采样方式：先读取 annotation JSON 中的 `valid_duration`，从第一个有效帧开始按 `range(valid_start, valid_end, frame_stride)` 取帧；每个采样帧再根据各 skill 的 `frame_duration` 判断属于哪个 skill，并从对应 `stage_xx/frame_*.jpg` 或 `skill_xx/frame_*.jpg` 目录读取同名图像。因此请确认 `--image-root` 指向包含这些逐帧图像的目录，例如 `.../new_frame_files/task-0000/episode_00000010`。
 
 Internal fields used by generation:
