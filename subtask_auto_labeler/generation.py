@@ -455,9 +455,9 @@ def build_completion_gate_context(
         )
     return (
         "Hard output constraint for move-to or navigation skills: this is the final sampled request "
-        "for the current move-to skill, so completion is allowed only if the current image directly "
-        "shows the robot settled at the target interaction pose and the target is within immediate "
-        "working distance. If that direct evidence is missing or ambiguous, do not mark completed."
+        "for the current move-to skill. Set current_skill_status to completed and set "
+        "is_subtask_completed to true. Keep the subtask field focused on the current move-to skill, "
+        "and describe the visible scene conservatively in reasoning and new_memory."
     )
 
 
@@ -471,13 +471,35 @@ def apply_hard_completion_gates(
 ) -> Optional[JsonObject]:
     if not is_move_to_skill(skill, subtask_prior):
         return None
-    if last_request_index is None or request_index >= last_request_index:
+    if last_request_index is None:
         return None
+    target_name = get_candidate_subtask_name(skill, subtask_prior)
     original_status = response.get("current_skill_status")
-    if original_status not in COMPLETED_STATUSES:
+    original_is_completed = response.get("is_subtask_completed")
+
+    if request_index >= last_request_index:
+        if original_status in COMPLETED_STATUSES and original_is_completed is True:
+            return None
+        response["current_skill_status"] = "completed"
+        response["is_subtask_completed"] = True
+        response["new_memory"] = build_move_to_completed_memory(response, target_name)
+        return {
+            "rule": "move_to_completion_fixed_by_last_request",
+            "reason": (
+                "Move-to or navigation skills are deterministically marked completed on the last "
+                "sampled request for that skill."
+            ),
+            "original_current_skill_status": original_status,
+            "original_is_subtask_completed": original_is_completed,
+            "forced_current_skill_status": "completed",
+            "forced_is_subtask_completed": True,
+            "request_index": request_index,
+            "last_request_index_for_stage": last_request_index,
+        }
+
+    if original_status not in COMPLETED_STATUSES and original_is_completed is not True:
         return None
 
-    target_name = get_candidate_subtask_name(skill, subtask_prior)
     response["current_skill_status"] = "in_progress"
     response["is_subtask_completed"] = False
     response["visible_transition"] = ""
@@ -489,7 +511,9 @@ def apply_hard_completion_gates(
             "for that skill."
         ),
         "original_current_skill_status": original_status,
+        "original_is_subtask_completed": original_is_completed,
         "forced_current_skill_status": "in_progress",
+        "forced_is_subtask_completed": False,
         "request_index": request_index,
         "last_request_index_for_stage": last_request_index,
     }
@@ -510,6 +534,19 @@ def build_move_to_hard_gate_memory(response: JsonObject, target_name: str) -> Js
             f"The robot is still moving toward or settling near {target_name}. "
             "The move-to subtask is not recorded as completed yet."
         ),
+        "World state": world_state,
+    }
+
+
+def build_move_to_completed_memory(response: JsonObject, target_name: str) -> JsonObject:
+    world_state = ""
+    existing_memory = response.get("new_memory")
+    if isinstance(existing_memory, dict):
+        world_state = str(existing_memory.get("World state", "")).strip()
+    if not world_state:
+        world_state = "The robot is at the target interaction location for the move-to subtask."
+    return {
+        "Progress": f"Moved to {target_name}.",
         "World state": world_state,
     }
 

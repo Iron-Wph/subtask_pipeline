@@ -269,11 +269,11 @@ Child-agent structured visual state guardrails:
 move-to / navigation skill:
   同一个 move-to skill 的非最后一次采样请求不允许输出 completed 或 completed_and_transitioning。
   即使当前图像看起来已经接近目标，也只能输出 in_progress 或 no_for_sure。
-  只有该 skill 的最后一次采样请求才允许输出 completed，
-  并且仍然必须满足当前图像中直接可见的稳定交互位姿和目标可达性证据。
+  该 skill 的最后一次采样请求会被固定为 completed，
+  并且 is_subtask_completed 会被固定为 true。
 ```
 
-这条规则的目的，是避免 move-to skill 在中间帧过早写入完成状态，影响后续 memory 和 skill 边界判断。它对所有任务通用，不依赖具体物体类别或 task 名称。
+这条规则的目的，是把 move-to skill 的完成边界固定在该 skill 的最后一次 generation 请求上，避免中间帧过早写入完成状态，也避免最后一帧被模型保守地写成 `in_progress`。它对所有任务通用，不依赖具体物体类别或 task 名称。
 
 实现位置：
 
@@ -283,8 +283,8 @@ subtask_auto_labeler/generation.py
     把通用硬规则写入每次请求的 Completion gate context。
 
   apply_hard_completion_gates()
-    如果模型仍然在非最后一次 move-to 请求中输出 completed，
-    程序会确定性改回 in_progress，并把 is_subtask_completed 改为 false。
+    非最后一次 move-to 请求会被确定性改成 in_progress / false；
+    最后一次 move-to 请求会被确定性改成 completed / true。
 
   is_move_to_skill()
     判断当前 skill 是否属于 move-to / navigation 类动作。
