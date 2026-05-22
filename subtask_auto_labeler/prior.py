@@ -51,6 +51,7 @@ PARENT_PRIOR_KEYS = {
     "skills",
 }
 DEFAULT_PRIOR_MIN_ITEMS = 4
+DEFAULT_PARENT_PRIOR_ATTEMPTS = 3
 PARENT_REVIEW_KEYS = (
     "stage_idx",
     "skill_idx",
@@ -105,10 +106,13 @@ def run_prior_pipeline(
     k: int = 10,
     prior_frame_stride: Optional[int] = None,
     prior_min_items: int = DEFAULT_PRIOR_MIN_ITEMS,
+    parent_prior_attempts: int = DEFAULT_PARENT_PRIOR_ATTEMPTS,
     request_delay: float = 0.0,
 ) -> JsonObject:
     if prior_min_items < 1:
         raise ValueError("prior_min_items must be at least 1.")
+    if parent_prior_attempts < 1:
+        raise ValueError("parent_prior_attempts must be at least 1.")
     if prior_frame_stride is not None and prior_frame_stride < 1:
         raise ValueError("prior_frame_stride must be >= 1.")
     episode = load_episode(annotation_json, image_root)
@@ -142,6 +146,7 @@ def run_prior_pipeline(
             prompt_catalog=prompt_catalog,
             gemini_client=gemini_client,
             prior_min_items=prior_min_items,
+            parent_prior_attempts=parent_prior_attempts,
         )
     except BaseException as exc:
         checkpoint = build_prior_pipeline_checkpoint(
@@ -153,6 +158,7 @@ def run_prior_pipeline(
             k=k,
             prior_frame_stride=prior_frame_stride,
             prior_min_items=prior_min_items,
+            parent_prior_attempts=parent_prior_attempts,
             status=checkpoint_status(exc),
             error=error_to_json(exc),
             current_skill=current_skill,
@@ -171,6 +177,7 @@ def run_prior_pipeline(
         "sample_k": k,
         "prior_frame_stride": prior_frame_stride,
         "prior_min_items": prior_min_items,
+        "parent_prior_attempts": parent_prior_attempts,
         "subtask_prior_paths": [str(subtask_dir / f"subtask_{skill.stage_idx:02d}_prior.json") for skill in episode.skills],
         "task_prior_path": str(output_dir / "task_prior.json"),
         "prompt_info_path": str(prompt_info_path),
@@ -327,6 +334,7 @@ def build_prior_pipeline_checkpoint(
     k: int,
     prior_frame_stride: Optional[int],
     prior_min_items: int,
+    parent_prior_attempts: int,
     status: str,
     error: JsonObject,
     current_skill: Optional[SkillSpec],
@@ -342,6 +350,7 @@ def build_prior_pipeline_checkpoint(
         "sample_k": k,
         "prior_frame_stride": prior_frame_stride,
         "prior_min_items": prior_min_items,
+        "parent_prior_attempts": parent_prior_attempts,
         "subtask_prior_paths": [
             str(output_dir / "subtasks" / f"subtask_{skill.stage_idx:02d}_prior.json")
             for skill in episode.skills
@@ -544,6 +553,7 @@ def run_parent_prior(
     prompt_catalog: PromptCatalog,
     gemini_client: GeminiClient,
     prior_min_items: int,
+    parent_prior_attempts: int = DEFAULT_PARENT_PRIOR_ATTEMPTS,
 ) -> JsonObject:
     system_instruction = prompt_catalog.get("parent_prior_system")
     prompt_values = {
@@ -560,28 +570,68 @@ def run_parent_prior(
         prompt_catalog.render("parent_prior_user", prompt_values),
         prompt_catalog.render_optional("target_consistency_rules", prompt_values),
     )
-    print("[prior-parent] reviewing child priors", flush=True)
-    try:
-        response, metadata = gemini_client.generate_json(
-            system_instruction=system_instruction,
-            prompt=prompt,
-            required_keys=PARENT_PRIOR_KEYS,
+    if parent_prior_attempts < 1:
+        raise ValueError("parent_prior_attempts must be at least 1.")
+    response: JsonObject = {}
+    metadata: JsonObject = {}
+    parent_errors: List[JsonObject] = []
+    parent_attempt_count = 0
+    for parent_attempt in range(1, parent_prior_attempts + 1):
+        parent_attempt_count = parent_attempt
+        print(
+            "[prior-parent] reviewing child priors "
+            f"attempt={parent_attempt}/{parent_prior_attempts}",
+            flush=True,
         )
-    except BaseException as exc:
-        parent_checkpoint: JsonObject = {
-            "status": checkpoint_status(exc),
-            "agent_type": "parent_review_agent",
-            "task_name": episode.task_name,
-            "annotation_json": str(episode.annotation_json),
-            "image_root": str(episode.image_root),
-            "prior_min_items": prior_min_items,
-            "current_request": {"phase": "parent_prior"},
-            "error": error_to_json(exc),
-            "subtask_prior_count": len(subtask_results),
-            "subtask_priors": subtask_results,
-        }
-        save_checkpoint(output_path, parent_checkpoint)
-        raise
+        try:
+            response, metadata = gemini_client.generate_json(
+                system_instruction=system_instruction,
+                prompt=prompt,
+                required_keys=PARENT_PRIOR_KEYS,
+            )
+            break
+        except KeyboardInterrupt as exc:
+            parent_checkpoint: JsonObject = {
+                "status": checkpoint_status(exc),
+                "agent_type": "parent_review_agent",
+                "task_name": episode.task_name,
+                "annotation_json": str(episode.annotation_json),
+                "image_root": str(episode.image_root),
+                "prior_min_items": prior_min_items,
+                "parent_prior_attempts": parent_prior_attempts,
+                "current_request": {
+                    "phase": "parent_prior",
+                    "parent_attempt": parent_attempt,
+                    "parent_prior_attempts": parent_prior_attempts,
+                },
+                "error": error_to_json(exc),
+                "subtask_prior_count": len(subtask_results),
+                "subtask_priors": subtask_results,
+            }
+            save_checkpoint(output_path, parent_checkpoint)
+            raise
+        except Exception as exc:
+            error = error_to_json(exc)
+            parent_errors.append(error)
+            print(
+                "[retry] parent_prior_failed "
+                f"attempt={parent_attempt}/{parent_prior_attempts} "
+                f"error={error['type']}: {error['message']}",
+                flush=True,
+            )
+            if parent_attempt < parent_prior_attempts:
+                time.sleep(min(3.0, float(parent_attempt)))
+                continue
+            parent_prior = build_parent_prior_fallback(
+                episode=episode,
+                subtask_results=subtask_results,
+                prior_min_items=prior_min_items,
+                parent_prior_attempts=parent_prior_attempts,
+                parent_errors=parent_errors,
+            )
+            write_json(output_path, parent_prior)
+            print(f"[fallback-saved] {output_path}", flush=True)
+            return parent_prior
     response = normalize_parent_prior_response(response)
     response = merge_parent_response_with_child_priors(response, subtask_results)
     parent_prior: JsonObject = {
@@ -591,6 +641,8 @@ def run_parent_prior(
         "annotation_json": str(episode.annotation_json),
         "image_root": str(episode.image_root),
         "prior_min_items": prior_min_items,
+        "parent_prior_attempts": parent_prior_attempts,
+        "parent_attempt_count": parent_attempt_count,
         "model_response": response,
         "subtask_prior_count": len(subtask_results),
         "subtask_priors": subtask_results,
@@ -601,6 +653,40 @@ def run_parent_prior(
     write_json(output_path, parent_prior)
     print(f"[saved] {output_path}", flush=True)
     return parent_prior
+
+
+def build_parent_prior_fallback(
+    *,
+    episode: EpisodeData,
+    subtask_results: List[JsonObject],
+    prior_min_items: int,
+    parent_prior_attempts: int,
+    parent_errors: List[JsonObject],
+) -> JsonObject:
+    response = merge_parent_response_with_child_priors(
+        {
+            "task_summary": episode.task_name,
+            "skills": [],
+        },
+        subtask_results,
+    )
+    parent_prior: JsonObject = {
+        "status": "parent_failed_child_fallback",
+        "usable_for_generation": True,
+        "agent_type": "parent_review_agent",
+        "task_name": episode.task_name,
+        "annotation_json": str(episode.annotation_json),
+        "image_root": str(episode.image_root),
+        "prior_min_items": prior_min_items,
+        "parent_prior_attempts": parent_prior_attempts,
+        "parent_attempt_count": len(parent_errors),
+        "model_response": response,
+        "parent_errors": parent_errors,
+        "parent_error": parent_errors[-1] if parent_errors else {},
+        "subtask_prior_count": len(subtask_results),
+        "subtask_priors": subtask_results,
+    }
+    return sanitize_visual_guidance(parent_prior)
 
 
 def normalize_parent_prior_response(response: JsonObject) -> JsonObject:
