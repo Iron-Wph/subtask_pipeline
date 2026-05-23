@@ -280,7 +280,7 @@ move-to / navigation skill:
 
 ### Rule 16 通用视觉判据
 
-pick-up、grasp、lift、press、toggle、switch、turn-on、turn-off 这类动作不做输出后的文本硬检查，也不通过 `Completion gate context` 强行改写结果。它们的通用要求会作为自然语言视觉判据追加到 generation prompt 的第 16 条 Rule 16 中，由模型结合当前图像和 memory 判断。
+pick-up、grasp、lift、press、toggle、switch、turn-on、turn-off、open、close 这类动作不做输出后的文本硬检查，也不通过 `Completion gate context` 强行改写结果。它们的通用要求会作为自然语言视觉判据追加到 generation prompt 的第 16 条 Rule 16 中，由模型结合当前图像和 memory 判断。
 
 当前 Rule 16 会追加的通用视觉判据包括：
 
@@ -298,6 +298,16 @@ press / toggle / switch / turn-on / turn-off / state-change skill:
   机械臂接触、正在按下、夹爪仍压在按钮上、任务顺序或 memory 都不能替代目标部件最终状态的可见证据。
   如果目标部件被夹爪遮挡、只露出边缘或一小块、颜色正在红绿过渡、颜色混合/过曝/阴影/模糊/反光，或可能来自附近灯光、墙上信号、炉灶按钮、反射或非目标标记，应输出 no_for_sure 或 in_progress。
   不能声称 red-to-green 或 off-to-on transition，除非当前图像清楚看到同一个目标部件已经处于最终状态。
+
+open / close skill:
+  只根据当前 skill 绑定的同一个可活动部件判断，例如门、盖子、抽屉、面板、翻盖、门边、铰链侧、把手侧或开口区域。
+  open 需要看到该部件相对框架分离，并且门/盖/面板角度清楚显示打开状态。
+  如果 skill 或 child prior 语义是 fully open / open completely / open wide enough for access，
+  必须看到较大的稳定开口并且内部或目标区域可访问；只开一条缝、释放门锁、门体半开都不是完成。
+  透过透明门窗、反射或前面板看到内部物体，不等于门/盖/面板已经打开。
+  close 需要看到该部件与框架齐平或对齐，并且开口不再可见。
+  抓住把手、触碰门面、靠近边缘、按下附近按钮/开关/指示灯、看到灯光或颜色变化，都不能作为 open/close 的完成证据，除非 annotation 明确把这些控件作为当前 skill 的目标部件。
+  如果门边、铰链、开口、把手侧缝隙、实际开口区域或闭合缝被遮挡、裁切、反光、模糊或几何关系不清楚，应输出 no_for_sure，而不是 completed。
 ```
 
 实现位置：
@@ -312,8 +322,8 @@ subtask_auto_labeler/generation.py
     最后一次 move-to 请求会被确定性改成 completed / true。
 
   render_action_primitive_generation_guardrails()
-    把 pick-up / grasp / lift 以及 press / toggle / switch 的通用视觉判据追加到 generation Rule 16；
-    重点约束反光台面、遮挡、顶部/边缘/把手被夹住但物体本体未离开支撑面、按钮被夹爪遮住却被误判成最终颜色等问题。
+    把 pick-up / grasp / lift、press / toggle / switch、open / close 的通用视觉判据追加到 generation Rule 16；
+    重点约束反光台面、遮挡、顶部/边缘/把手被夹住但物体本体未离开支撑面、按钮被夹爪遮住却被误判成最终颜色、开门任务被附近按钮/开关带偏等问题。
 
   is_move_to_skill()
     判断当前 skill 是否属于 move-to / navigation 类动作。
@@ -323,6 +333,9 @@ subtask_auto_labeler/generation.py
 
   is_state_change_prior()
     根据 child prior 判断当前 skill 是否属于 press / toggle / switch / turn-on / turn-off 类动作，并决定是否追加对应 Rule 16 判据。
+
+  is_open_close_prior()
+    根据 child prior 判断当前 skill 是否属于 open / close 类动作，并决定是否追加对应 Rule 16 判据。
 ```
 
 如果后续需要增加类似 place 的通用视觉判据，例如必须看到释放并稳定接触目标位置，优先扩展 `render_action_primitive_generation_guardrails()`，让它进入 Rule 16；只有像 move-to 最后一帧这种明确依赖采样边界的规则，才应放到 `build_completion_gate_context()` 或 `apply_hard_completion_gates()` 中。
