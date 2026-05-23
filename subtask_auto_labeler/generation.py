@@ -441,6 +441,26 @@ def build_completion_gate_context(
     request_index: int,
     last_request_index: Optional[int],
 ) -> str:
+    if is_object_acquisition_skill(skill, subtask_prior):
+        return (
+            "Hard output constraint for pick-up, grasp, lift, or object-acquisition skills: do not "
+            "mark completed unless the current image directly shows BOTH facts at the same time: "
+            "the robot gripper physically controls the target object body itself, and the target "
+            "object body is clearly no longer supported by its original surface, container, floor, "
+            "or fixture. Reaching, touching, pinching the top edge, beginning to close the gripper, "
+            "deforming the object, handle-only contact, rim-only contact, edge-only contact, or "
+            "partly occluding the target is not enough. For every target object, contact at the "
+            "top, rim, handle, side, or edge does not prove the whole object body has been lifted; "
+            "the lower body, bottom, or original support/contact boundary must be visibly separated, "
+            "or the whole target body must be visibly carried in free space. "
+            "On glossy, transparent, reflective, or dark surfaces, never treat shadows, reflections, "
+            "glare, highlights, mirrored copies, dark seams, perspective distortion, or a tiny "
+            "apparent gap as positive lift-off evidence. Do not claim a clear gap unless the real "
+            "object bottom/lower body and the real support surface boundary are both visible and "
+            "unobscured. If the underside, lower body, or original support/contact boundary is hidden "
+            "by the gripper, object, countertop edge, container wall, glare, reflection, or camera "
+            "viewpoint, use no_for_sure instead of completed."
+        )
     if not is_move_to_skill(skill, subtask_prior):
         return "No extra completion gate."
     if last_request_index is None:
@@ -563,6 +583,29 @@ def is_move_to_skill(skill: SkillSpec, subtask_prior: JsonObject) -> bool:
     ]
     text = " ".join(normalize_action_text(value) for value in candidates)
     return any(pattern in text for pattern in ("move to", "navigate to", "go to"))
+
+
+def is_object_acquisition_skill(skill: SkillSpec, subtask_prior: JsonObject) -> bool:
+    child_prior = subtask_prior.get("child_prior")
+    child = child_prior if isinstance(child_prior, dict) else {}
+    candidates = [
+        skill.skill_description,
+        skill.skill.get("skill_description"),
+        child.get("skill_description"),
+        child.get("skill_type_hypothesis"),
+        child.get("subtask_name"),
+    ]
+    text = " ".join(normalize_action_text(value) for value in candidates)
+    patterns = (
+        "object acquisition",
+        "pick up",
+        "pickup",
+        "pick ",
+        "grasp",
+        "lift",
+        "take ",
+    )
+    return any(pattern in text for pattern in patterns)
 
 
 def normalize_action_text(value: object) -> str:
@@ -761,6 +804,11 @@ def build_completion_guidance(global_prompt_info: JsonObject, subtask_prior: Jso
             lines.append("")
             lines.append("Child-agent structured visual state guardrails:")
             lines.append(child_state_guidance)
+        action_guardrails = render_action_primitive_generation_guardrails(child_prior)
+        if action_guardrails:
+            lines.append("")
+            lines.append("Generic action primitive hard guardrails:")
+            lines.append(action_guardrails)
     else:
         if lines:
             lines.append("")
@@ -781,6 +829,52 @@ def build_completion_guidance(global_prompt_info: JsonObject, subtask_prior: Jso
         "the required visible result state."
     )
     return "\n".join(lines)
+
+
+def render_action_primitive_generation_guardrails(child_prior: JsonObject) -> str:
+    if not is_object_acquisition_prior(child_prior):
+        return ""
+    return (
+        "For pick-up, grasp, lift, or object-acquisition labeling, interpret all completion gates "
+        "strictly as direct object-body evidence. The candidate skill can be completed only when the "
+        "current image clearly shows the robot gripper controlling the target object body itself and "
+        "the target object body no longer being supported by the original surface, container, floor, "
+        "or fixture. The decisive evidence must come from the real object-support boundary or from "
+        "the whole target body being visibly carried in free space, not from indirect cues. For every "
+        "target object, top contact, rim contact, handle contact, side contact, edge contact, squeezing, "
+        "deforming, or partial enclosure is still not enough; the lower body, bottom, or support/contact "
+        "boundary must be visibly separated from the original support, or the whole target body must be "
+        "visibly carried. "
+        "On glossy, glass, transparent, reflective, metallic, dark, or high-glare surfaces, do not use "
+        "shadows, reflections, glare, highlights, mirrored object copies, dark seams, perspective "
+        "distortion, or a tiny apparent gap as evidence that the object has left the surface. Do not "
+        "claim that a clear gap is visible unless the real object bottom/lower body and the real support "
+        "surface boundary are both visible and unobscured. If the support/contact boundary, underside, "
+        "lower body, or lift-off region is hidden by the robot gripper, the target object, a countertop "
+        "edge, a container wall, glare, reflection, blur, or viewpoint, use no_for_sure instead of "
+        "completed. Treat reaching, hovering, touching, closing the gripper, handle-only contact, rim-only "
+        "contact, top-edge contact, side contact, partial occlusion, leaning, rotating, sliding, or an "
+        "unchanged support region as in_progress or no_for_sure, not completed."
+    )
+
+
+def is_object_acquisition_prior(child_prior: JsonObject) -> bool:
+    candidates = [
+        child_prior.get("skill_description"),
+        child_prior.get("skill_type_hypothesis"),
+        child_prior.get("subtask_name"),
+    ]
+    text = " ".join(normalize_action_text(value) for value in candidates)
+    patterns = (
+        "object acquisition",
+        "pick up",
+        "pickup",
+        "pick ",
+        "grasp",
+        "lift",
+        "take ",
+    )
+    return any(pattern in text for pattern in patterns)
 
 
 def render_child_structured_guardrails(child_prior: JsonObject) -> str:

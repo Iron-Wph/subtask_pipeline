@@ -274,6 +274,14 @@ move-to / navigation skill:
   即使当前图像看起来已经接近目标，也只能输出 in_progress 或 no_for_sure。
   该 skill 的最后一次采样请求会被固定为 completed，
   并且 is_subtask_completed 会被固定为 true。
+
+pick-up / grasp / lift / object-acquisition skill:
+  只有同时直接看到机器人控制目标物体本体、且目标物体本体明确离开原始支撑面/容器/地面/固定位置，才允许 completed。
+  伸手、触碰、夹住顶部/边缘/侧面/把手/开口、刚开始闭合夹爪、物体被挤压变形、局部遮挡、倾斜、旋转、滑动，都不能当作拿起完成。
+  对所有物体都必须看到下半部分、底部或原始支撑接触边界已经离开支撑面，或者整个目标物体本体已经被清楚地带离支撑位置。
+  在玻璃、镜面、透明、金属、深色或强反光台面上，阴影、反射、高光、镜像、暗线、透视错觉或很小的疑似缝隙不能作为离开台面的正证据。
+  不能声称 clear gap，除非真实物体底部/下半部分和真实支撑面边界都清楚可见且无遮挡。
+  如果底部、下半部分、支撑接触边界或离台区域被夹爪、物体、台面边缘、容器壁、反光、眩光、模糊或视角遮住，应输出 no_for_sure，而不是 completed。
 ```
 
 这条规则的目的，是把 move-to skill 的完成边界固定在该 skill 的最后一次 generation 请求上，避免中间帧过早写入完成状态，也避免最后一帧被模型保守地写成 `in_progress`。它对所有任务通用，不依赖具体物体类别或 task 名称。
@@ -289,11 +297,18 @@ subtask_auto_labeler/generation.py
     非最后一次 move-to 请求会被确定性改成 in_progress / false；
     最后一次 move-to 请求会被确定性改成 completed / true。
 
+  render_action_primitive_generation_guardrails()
+    把 pick-up / grasp / lift 的通用视觉硬判据追加到 generation Rule 16；
+    重点约束反光台面、遮挡、顶部/边缘/把手被夹住但物体本体未离开支撑面等误判。
+
   is_move_to_skill()
     判断当前 skill 是否属于 move-to / navigation 类动作。
+
+  is_object_acquisition_skill()
+    判断当前 skill 是否属于 pick-up / grasp / lift / object-acquisition 类动作。
 ```
 
-如果后续需要增加类似的通用硬规则，例如 pick-up 必须看到离开支撑面、place 必须看到释放并稳定接触目标位置，优先在这三个函数附近扩展，不要写进某个具体 task 的 `generation_prompt_guidance`。
+如果后续需要增加类似的通用硬规则，例如 place 必须看到释放并稳定接触目标位置，优先在这些函数附近扩展，不要写进某个具体 task 的 `generation_prompt_guidance`。
 
 `--frame-stride` 会复用旧 `api_gemini_without_wrist.py` 的采样方式：先读取 annotation JSON 中的 `valid_duration`，从第一个有效帧开始按 `range(valid_start, valid_end, frame_stride)` 取帧；每个采样帧再根据各 skill 的 `frame_duration` 判断属于哪个 skill，并从对应 `stage_xx/frame_*.jpg` 或 `skill_xx/frame_*.jpg` 目录读取同名图像。因此请确认 `--image-root` 指向包含这些逐帧图像的目录，例如 `.../new_frame_files/task-0000/episode_00000010`。
 
