@@ -266,7 +266,7 @@ Child-agent structured visual state guardrails:
 
 ### 通用硬性完成规则
 
-除了 child-agent 生成的可见判据，`generation.py` 还会在逐帧 generation 阶段加入少量跨任务通用硬规则。目前内置规则如下：
+`generation.py` 目前只对 move-to / navigation 做确定性硬规则。这条规则来自采样边界本身，不依赖某个具体 task：
 
 ```text
 move-to / navigation skill:
@@ -274,41 +274,58 @@ move-to / navigation skill:
   即使当前图像看起来已经接近目标，也只能输出 in_progress 或 no_for_sure。
   该 skill 的最后一次采样请求会被固定为 completed，
   并且 is_subtask_completed 会被固定为 true。
-
-pick-up / grasp / lift / object-acquisition skill:
-  只有同时直接看到机器人控制目标物体本体、且目标物体本体明确离开原始支撑面/容器/地面/固定位置，才允许 completed。
-  伸手、触碰、夹住顶部/边缘/侧面/把手/开口、刚开始闭合夹爪、物体被挤压变形、局部遮挡、倾斜、旋转、滑动，都不能当作拿起完成。
-  对所有物体都必须看到下半部分、底部或原始支撑接触边界已经离开支撑面，或者整个目标物体本体已经被清楚地带离支撑位置。
-  在玻璃、镜面、透明、金属、深色或强反光台面上，阴影、反射、高光、镜像、暗线、透视错觉或很小的疑似缝隙不能作为离开台面的正证据。
-  不能声称 clear gap，除非真实物体底部/下半部分和真实支撑面边界都清楚可见且无遮挡。
-  如果底部、下半部分、支撑接触边界或离台区域被夹爪、物体、台面边缘、容器壁、反光、眩光、模糊或视角遮住，应输出 no_for_sure，而不是 completed。
 ```
 
 这条规则的目的，是把 move-to skill 的完成边界固定在该 skill 的最后一次 generation 请求上，避免中间帧过早写入完成状态，也避免最后一帧被模型保守地写成 `in_progress`。它对所有任务通用，不依赖具体物体类别或 task 名称。
+
+### Rule 16 通用视觉判据
+
+pick-up、grasp、lift、press、toggle、switch、turn-on、turn-off 这类动作不做输出后的文本硬检查，也不通过 `Completion gate context` 强行改写结果。它们的通用要求会作为自然语言视觉判据追加到 generation prompt 的第 16 条 Rule 16 中，由模型结合当前图像和 memory 判断。
+
+当前 Rule 16 会追加的通用视觉判据包括：
+
+```text
+pick-up / grasp / lift / object-acquisition skill:
+  只有当前图像清楚显示机器人控制目标物体本体，
+  且目标物体本体明确离开原始支撑面/容器/地面/固定位置，才应判断为 completed。
+  伸手、触碰、夹住顶部/边缘/侧面/把手/开口、刚开始闭合夹爪、物体被挤压变形、局部遮挡、倾斜、旋转、滑动，都不是拿起完成的充分证据。
+  对所有物体都应看到下半部分、底部或原始支撑接触边界已经离开支撑面，或者整个目标物体本体已经被清楚地带离支撑位置。
+  在玻璃、镜面、透明、金属、深色或强反光台面上，阴影、反射、高光、镜像、暗线、透视错觉或很小的疑似缝隙不能作为离开台面的正证据。
+  如果底部、下半部分、支撑接触边界或离台区域被夹爪、物体、台面边缘、容器壁、反光、眩光、模糊或视角遮住，应输出 no_for_sure，而不是 completed。
+
+press / toggle / switch / turn-on / turn-off / state-change skill:
+  只有当前图像中同一个目标按钮/开关/指示灯/显示部件清楚可见，并且明确显示最终颜色、亮灭、凹陷、姿态或开闭状态，才应判断为 completed。
+  机械臂接触、正在按下、夹爪仍压在按钮上、任务顺序或 memory 都不能替代目标部件最终状态的可见证据。
+  如果目标部件被夹爪遮挡、只露出边缘或一小块、颜色正在红绿过渡、颜色混合/过曝/阴影/模糊/反光，或可能来自附近灯光、墙上信号、炉灶按钮、反射或非目标标记，应输出 no_for_sure 或 in_progress。
+  不能声称 red-to-green 或 off-to-on transition，除非当前图像清楚看到同一个目标部件已经处于最终状态。
+```
 
 实现位置：
 
 ```text
 subtask_auto_labeler/generation.py
   build_completion_gate_context()
-    把通用硬规则写入每次请求的 Completion gate context。
+    只负责 move-to / navigation 的采样边界硬规则。
 
   apply_hard_completion_gates()
     非最后一次 move-to 请求会被确定性改成 in_progress / false；
     最后一次 move-to 请求会被确定性改成 completed / true。
 
   render_action_primitive_generation_guardrails()
-    把 pick-up / grasp / lift 的通用视觉硬判据追加到 generation Rule 16；
-    重点约束反光台面、遮挡、顶部/边缘/把手被夹住但物体本体未离开支撑面等误判。
+    把 pick-up / grasp / lift 以及 press / toggle / switch 的通用视觉判据追加到 generation Rule 16；
+    重点约束反光台面、遮挡、顶部/边缘/把手被夹住但物体本体未离开支撑面、按钮被夹爪遮住却被误判成最终颜色等问题。
 
   is_move_to_skill()
     判断当前 skill 是否属于 move-to / navigation 类动作。
 
-  is_object_acquisition_skill()
-    判断当前 skill 是否属于 pick-up / grasp / lift / object-acquisition 类动作。
+  is_object_acquisition_prior()
+    根据 child prior 判断当前 skill 是否属于 pick-up / grasp / lift / object-acquisition 类动作，并决定是否追加对应 Rule 16 判据。
+
+  is_state_change_prior()
+    根据 child prior 判断当前 skill 是否属于 press / toggle / switch / turn-on / turn-off 类动作，并决定是否追加对应 Rule 16 判据。
 ```
 
-如果后续需要增加类似的通用硬规则，例如 place 必须看到释放并稳定接触目标位置，优先在这些函数附近扩展，不要写进某个具体 task 的 `generation_prompt_guidance`。
+如果后续需要增加类似 place 的通用视觉判据，例如必须看到释放并稳定接触目标位置，优先扩展 `render_action_primitive_generation_guardrails()`，让它进入 Rule 16；只有像 move-to 最后一帧这种明确依赖采样边界的规则，才应放到 `build_completion_gate_context()` 或 `apply_hard_completion_gates()` 中。
 
 `--frame-stride` 会复用旧 `api_gemini_without_wrist.py` 的采样方式：先读取 annotation JSON 中的 `valid_duration`，从第一个有效帧开始按 `range(valid_start, valid_end, frame_stride)` 取帧；每个采样帧再根据各 skill 的 `frame_duration` 判断属于哪个 skill，并从对应 `stage_xx/frame_*.jpg` 或 `skill_xx/frame_*.jpg` 目录读取同名图像。因此请确认 `--image-root` 指向包含这些逐帧图像的目录，例如 `.../new_frame_files/task-0000/episode_00000010`。
 

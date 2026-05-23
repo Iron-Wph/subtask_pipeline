@@ -441,26 +441,6 @@ def build_completion_gate_context(
     request_index: int,
     last_request_index: Optional[int],
 ) -> str:
-    if is_object_acquisition_skill(skill, subtask_prior):
-        return (
-            "Hard output constraint for pick-up, grasp, lift, or object-acquisition skills: do not "
-            "mark completed unless the current image directly shows BOTH facts at the same time: "
-            "the robot gripper physically controls the target object body itself, and the target "
-            "object body is clearly no longer supported by its original surface, container, floor, "
-            "or fixture. Reaching, touching, pinching the top edge, beginning to close the gripper, "
-            "deforming the object, handle-only contact, rim-only contact, edge-only contact, or "
-            "partly occluding the target is not enough. For every target object, contact at the "
-            "top, rim, handle, side, or edge does not prove the whole object body has been lifted; "
-            "the lower body, bottom, or original support/contact boundary must be visibly separated, "
-            "or the whole target body must be visibly carried in free space. "
-            "On glossy, transparent, reflective, or dark surfaces, never treat shadows, reflections, "
-            "glare, highlights, mirrored copies, dark seams, perspective distortion, or a tiny "
-            "apparent gap as positive lift-off evidence. Do not claim a clear gap unless the real "
-            "object bottom/lower body and the real support surface boundary are both visible and "
-            "unobscured. If the underside, lower body, or original support/contact boundary is hidden "
-            "by the gripper, object, countertop edge, container wall, glare, reflection, or camera "
-            "viewpoint, use no_for_sure instead of completed."
-        )
     if not is_move_to_skill(skill, subtask_prior):
         return "No extra completion gate."
     if last_request_index is None:
@@ -583,29 +563,6 @@ def is_move_to_skill(skill: SkillSpec, subtask_prior: JsonObject) -> bool:
     ]
     text = " ".join(normalize_action_text(value) for value in candidates)
     return any(pattern in text for pattern in ("move to", "navigate to", "go to"))
-
-
-def is_object_acquisition_skill(skill: SkillSpec, subtask_prior: JsonObject) -> bool:
-    child_prior = subtask_prior.get("child_prior")
-    child = child_prior if isinstance(child_prior, dict) else {}
-    candidates = [
-        skill.skill_description,
-        skill.skill.get("skill_description"),
-        child.get("skill_description"),
-        child.get("skill_type_hypothesis"),
-        child.get("subtask_name"),
-    ]
-    text = " ".join(normalize_action_text(value) for value in candidates)
-    patterns = (
-        "object acquisition",
-        "pick up",
-        "pickup",
-        "pick ",
-        "grasp",
-        "lift",
-        "take ",
-    )
-    return any(pattern in text for pattern in patterns)
 
 
 def normalize_action_text(value: object) -> str:
@@ -807,7 +764,7 @@ def build_completion_guidance(global_prompt_info: JsonObject, subtask_prior: Jso
         action_guardrails = render_action_primitive_generation_guardrails(child_prior)
         if action_guardrails:
             lines.append("")
-            lines.append("Generic action primitive hard guardrails:")
+            lines.append("Generic action primitive visual criteria:")
             lines.append(action_guardrails)
     else:
         if lines:
@@ -832,30 +789,46 @@ def build_completion_guidance(global_prompt_info: JsonObject, subtask_prior: Jso
 
 
 def render_action_primitive_generation_guardrails(child_prior: JsonObject) -> str:
-    if not is_object_acquisition_prior(child_prior):
-        return ""
-    return (
-        "For pick-up, grasp, lift, or object-acquisition labeling, interpret all completion gates "
-        "strictly as direct object-body evidence. The candidate skill can be completed only when the "
-        "current image clearly shows the robot gripper controlling the target object body itself and "
-        "the target object body no longer being supported by the original surface, container, floor, "
-        "or fixture. The decisive evidence must come from the real object-support boundary or from "
-        "the whole target body being visibly carried in free space, not from indirect cues. For every "
-        "target object, top contact, rim contact, handle contact, side contact, edge contact, squeezing, "
-        "deforming, or partial enclosure is still not enough; the lower body, bottom, or support/contact "
-        "boundary must be visibly separated from the original support, or the whole target body must be "
-        "visibly carried. "
-        "On glossy, glass, transparent, reflective, metallic, dark, or high-glare surfaces, do not use "
-        "shadows, reflections, glare, highlights, mirrored object copies, dark seams, perspective "
-        "distortion, or a tiny apparent gap as evidence that the object has left the surface. Do not "
-        "claim that a clear gap is visible unless the real object bottom/lower body and the real support "
-        "surface boundary are both visible and unobscured. If the support/contact boundary, underside, "
-        "lower body, or lift-off region is hidden by the robot gripper, the target object, a countertop "
-        "edge, a container wall, glare, reflection, blur, or viewpoint, use no_for_sure instead of "
-        "completed. Treat reaching, hovering, touching, closing the gripper, handle-only contact, rim-only "
-        "contact, top-edge contact, side contact, partial occlusion, leaning, rotating, sliding, or an "
-        "unchanged support region as in_progress or no_for_sure, not completed."
-    )
+    if is_object_acquisition_prior(child_prior):
+        return (
+            "For pick-up, grasp, lift, or object-acquisition labeling, interpret all completion gates "
+            "strictly as direct object-body evidence. The candidate skill can be completed only when the "
+            "current image clearly shows the robot gripper controlling the target object body itself and "
+            "the target object body no longer being supported by the original surface, container, floor, "
+            "or fixture. The decisive evidence must come from the real object-support boundary or from "
+            "the whole target body being visibly carried in free space, not from indirect cues. For every "
+            "target object, top contact, rim contact, handle contact, side contact, edge contact, squeezing, "
+            "deforming, or partial enclosure is still not enough; the lower body, bottom, or support/contact "
+            "boundary must be visibly separated from the original support, or the whole target body must be "
+            "visibly carried. "
+            "On glossy, glass, transparent, reflective, metallic, dark, or high-glare surfaces, do not use "
+            "shadows, reflections, glare, highlights, mirrored object copies, dark seams, perspective "
+            "distortion, or a tiny apparent gap as evidence that the object has left the surface. Do not "
+            "claim that a clear gap is visible unless the real object bottom/lower body and the real support "
+            "surface boundary are both visible and unobscured. If the support/contact boundary, underside, "
+            "lower body, or lift-off region is hidden by the robot gripper, the target object, a countertop "
+            "edge, a container wall, glare, reflection, blur, or viewpoint, use no_for_sure instead of "
+            "completed. Treat reaching, hovering, touching, closing the gripper, handle-only contact, rim-only "
+            "contact, top-edge contact, side contact, partial occlusion, leaning, rotating, sliding, or an "
+            "unchanged support region as in_progress or no_for_sure, not completed."
+        )
+    if is_state_change_prior(child_prior):
+        return (
+            "For press, toggle, switch, turn-on, turn-off, or state-change labeling, completion requires "
+            "the exact target part to be directly visible in the current image with the required final "
+            "state. The same target button, switch, indicator, display, or movable part named by the "
+            "current skill must show the final color, light, depression, pose, aperture, or on/off state. "
+            "Robot contact, a pressing motion, the gripper still touching the target, a task sequence, or "
+            "previous memory is not enough. For color or light changes, do not mark completed when the "
+            "target part is covered by the gripper or only partly visible, when the color is changing, "
+            "mixed, dim, saturated, shadowed, or visible only as a tiny exposed edge, or when the apparent "
+            "final color could come from a nearby light, reflection, colored mark, wall signal, stove "
+            "control, or other non-target part. If the target state region is occluded, cropped, blurred, "
+            "reflective, glare-covered, or ambiguous, use no_for_sure instead of completed. Do not claim "
+            "a red-to-green, off-to-on, open-to-closed, or similar transition unless the current image "
+            "clearly shows the same target part in the final state."
+        )
+    return ""
 
 
 def is_object_acquisition_prior(child_prior: JsonObject) -> bool:
@@ -873,6 +846,25 @@ def is_object_acquisition_prior(child_prior: JsonObject) -> bool:
         "grasp",
         "lift",
         "take ",
+    )
+    return any(pattern in text for pattern in patterns)
+
+
+def is_state_change_prior(child_prior: JsonObject) -> bool:
+    candidates = [
+        child_prior.get("skill_description"),
+        child_prior.get("skill_type_hypothesis"),
+        child_prior.get("subtask_name"),
+    ]
+    text = " ".join(normalize_action_text(value) for value in candidates)
+    patterns = (
+        "state change",
+        "state change press toggle",
+        "press",
+        "toggle",
+        "switch",
+        "turn on",
+        "turn off",
     )
     return any(pattern in text for pattern in patterns)
 
