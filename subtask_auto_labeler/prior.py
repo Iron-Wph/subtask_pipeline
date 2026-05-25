@@ -94,6 +94,20 @@ CHILD_PRIOR_SNAPSHOT_KEYS = (
     "ambiguous_cases",
     "generation_prompt_guidance",
 )
+RUNNING_PRIOR_LIST_FIELDS = (
+    "pre_completion_state",
+    "in_progress_state",
+    "completion_gates",
+    "completion_conditions",
+    "required_visual_evidence",
+    "state_transition_evidence",
+    "negative_conditions",
+    "not_sufficient_for_completion",
+    "common_false_positives",
+    "ambiguous_cases",
+)
+RUNNING_PRIOR_CONTEXT_MAX_ITEMS = 12
+RUNNING_PRIOR_CONTEXT_RECENT_FRAMES = 3
 
 
 def run_prior_pipeline(
@@ -227,6 +241,7 @@ def run_subtask_prior(
                 if previous_record is not None
                 else "No previous sampled frame for this skill."
             )
+            running_prior_context = render_running_prior_context(episode, skill, frame_results)
             prompt_values = {
                 "task_name": episode.task_name,
                 "stage_idx": skill.stage_idx,
@@ -240,6 +255,7 @@ def run_subtask_prior(
                 "sample_count": len(samples),
                 "prior_min_items": prior_min_items,
                 "previous_frame_context": previous_context,
+                "running_prior_context": running_prior_context,
                 "universal_visual_rubric": prompt_catalog.render_optional("universal_visual_rubric", {}),
                 "action_primitive_rubric": prompt_catalog.render_optional("action_primitive_rubric", {}),
             }
@@ -494,6 +510,58 @@ def summarize_subtask_prior(
         "sampled_frame_analysis": timeline,
         "raw_frame_requests": frame_results,
     }
+
+
+def render_running_prior_context(
+    episode: EpisodeData,
+    skill: SkillSpec,
+    frame_results: List[JsonObject],
+) -> str:
+    payload = build_running_prior_context(episode, skill, frame_results)
+    if not payload:
+        return "No accumulated sampled-frame prior yet."
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def build_running_prior_context(
+    episode: EpisodeData,
+    skill: SkillSpec,
+    frame_results: List[JsonObject],
+) -> JsonObject:
+    if not frame_results:
+        return {}
+    summary = summarize_subtask_prior(episode, skill, frame_results)
+    latest_record = frame_results[-1]
+    payload: JsonObject = {
+        "description": (
+            "Compact accumulated prior draft from earlier sampled frames for this same skill. "
+            "Use it as mutable context: preserve useful concrete criteria, correct weak items, "
+            "and add new current-frame evidence."
+        ),
+        "processed_sample_count": len(frame_results),
+        "latest_frame_number": latest_record.get("frame_number"),
+        "latest_status_hint": latest_record.get("model_response", {}).get("status_hint", ""),
+    }
+    for key in ("skill_type_hypothesis", "target_binding", "subtask_name", "target_visual_description"):
+        value = summary.get(key)
+        if value:
+            payload[key] = value
+    for key in RUNNING_PRIOR_LIST_FIELDS:
+        values = summary.get(key, [])
+        if isinstance(values, list):
+            payload[key] = values[:RUNNING_PRIOR_CONTEXT_MAX_ITEMS]
+    recent_frames: List[JsonObject] = []
+    for record in frame_results[-RUNNING_PRIOR_CONTEXT_RECENT_FRAMES:]:
+        model_response = record.get("model_response", {})
+        recent_frames.append(
+            {
+                "frame_number": record.get("frame_number"),
+                "status_hint": model_response.get("status_hint", ""),
+                "frame_state_memory": model_response.get("frame_state_memory", {}),
+            }
+        )
+    payload["recent_sampled_frames"] = recent_frames
+    return payload
 
 
 def consolidate_subtask_prior(

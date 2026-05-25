@@ -77,6 +77,10 @@ manuipation_object_id 或 manipulating_object_id
 
 每个 skill 会在 `frame_duration` 内均匀采样 `k` 帧，默认 `k=10`，不包含起始帧和终止帧。从第二个采样帧开始，prior 请求会同时带上上一采样帧图像和上一轮响应，用于提取更明确的视觉状态转移。
 
+Autolabel 子 agent 现在还会在每次请求中带上一个累计的 sampled-frame prior draft。它由该 skill 已处理采样帧的响应合并而来，包含当前累计的 `target_binding`、`target_visual_description`、`pre_completion_state`、`in_progress_state`、`completion_gates`、`completion_conditions`、`required_visual_evidence`、`state_transition_evidence`、`negative_conditions`、`not_sufficient_for_completion`、`common_false_positives` 和 `ambiguous_cases`。模型应把它当作可修正的运行中检查表：保留仍然有效的具体判据，修正弱项，并把当前帧的新证据补进去，而不是每帧从零开始生成。
+
+这里的“迭代”发生在子 agent 的 frame-level prior 请求阶段：上一帧完整 `model_response` 负责局部时序比较，累计 prior draft 负责跨多帧保留完成门槛、未完成状态、误判风险和 no_for_sure 情况。最终 `subtask_XX_prior.json` 仍会再经过 child-summary agent 汇总，生成 `generation_prompt_guidance` 供大规模生成阶段加载。
+
 Each skill first produces frame-level prior candidates, then the child-summary agent consolidates them. List fields default to at least 4 non-duplicate items and can be controlled with `--prior-min-items`. The relevant list fields include `pre_completion_state`, `in_progress_state`, `completion_gates`, `completion_conditions`, `required_visual_evidence`, `state_transition_evidence`, `negative_conditions`, `not_sufficient_for_completion`, `common_false_positives`, and `ambiguous_cases`.
 
 By default, prior sampling uses `--sample-k 10` and samples uniformly inside each skill's `frame_duration`, excluding the boundary frames. For denser temporal evidence, use `--prior-frame-stride 30`; this samples every 30 frames inside each skill range and overrides `--sample-k` for prior generation. Dense prior sampling is useful for short state-change moments where a fixed `k` can miss pre-contact, occlusion, and post-state evidence.
