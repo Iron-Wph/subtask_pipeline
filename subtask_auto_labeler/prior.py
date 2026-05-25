@@ -12,21 +12,12 @@ from .visual_guidance import sanitize_visual_guidance
 
 SUBTASK_FRAME_KEYS = {
     "frame_reasoning",
-    "frame_state_memory",
-    "skill_type_hypothesis",
-    "target_binding",
-    "subtask_name",
-    "target_visual_description",
-    "pre_completion_state",
-    "in_progress_state",
-    "completion_gates",
-    "completion_conditions",
-    "required_visual_evidence",
-    "state_transition_evidence",
-    "negative_conditions",
-    "not_sufficient_for_completion",
-    "common_false_positives",
-    "ambiguous_cases",
+    "objects",
+    "robot_state",
+    "scene_context",
+    "skill_relevant_observations",
+    "temporal_change_from_previous",
+    "uncertainty",
     "status_hint",
 }
 SUBTASK_SUMMARY_KEYS = {
@@ -93,18 +84,6 @@ CHILD_PRIOR_SNAPSHOT_KEYS = (
     "common_false_positives",
     "ambiguous_cases",
     "generation_prompt_guidance",
-)
-RUNNING_PRIOR_LIST_FIELDS = (
-    "pre_completion_state",
-    "in_progress_state",
-    "completion_gates",
-    "completion_conditions",
-    "required_visual_evidence",
-    "state_transition_evidence",
-    "negative_conditions",
-    "not_sufficient_for_completion",
-    "common_false_positives",
-    "ambiguous_cases",
 )
 RUNNING_PRIOR_CONTEXT_MAX_ITEMS = 12
 RUNNING_PRIOR_CONTEXT_RECENT_FRAMES = 3
@@ -241,7 +220,7 @@ def run_subtask_prior(
                 if previous_record is not None
                 else "No previous sampled frame for this skill."
             )
-            running_prior_context = render_running_prior_context(episode, skill, frame_results)
+            running_observation_context = render_running_observation_context(episode, skill, frame_results)
             prompt_values = {
                 "task_name": episode.task_name,
                 "stage_idx": skill.stage_idx,
@@ -255,14 +234,11 @@ def run_subtask_prior(
                 "sample_count": len(samples),
                 "prior_min_items": prior_min_items,
                 "previous_frame_context": previous_context,
-                "running_prior_context": running_prior_context,
+                "running_observation_context": running_observation_context,
                 "universal_visual_rubric": prompt_catalog.render_optional("universal_visual_rubric", {}),
                 "action_primitive_rubric": prompt_catalog.render_optional("action_primitive_rubric", {}),
             }
-            prompt = append_optional_prompt(
-                prompt_catalog.render("subtask_prior_user", prompt_values),
-                prompt_catalog.render_optional("target_consistency_rules", prompt_values),
-            )
+            prompt = prompt_catalog.render("subtask_prior_user", prompt_values)
             image_paths = [sample.image_path]
             if previous_record is not None:
                 image_paths = [Path(previous_record["image_path"]), sample.image_path]
@@ -421,53 +397,7 @@ def summarize_subtask_prior(
     skill: SkillSpec,
     frame_results: List[JsonObject],
 ) -> JsonObject:
-    pre_completion_state = merge_string_lists(
-        record["model_response"].get("pre_completion_state", []) for record in frame_results
-    )
-    in_progress_state = merge_string_lists(
-        record["model_response"].get("in_progress_state", []) for record in frame_results
-    )
-    completion_gates = merge_string_lists(
-        record["model_response"].get("completion_gates", []) for record in frame_results
-    )
-    completion_conditions = merge_string_lists(
-        record["model_response"].get("completion_conditions", []) for record in frame_results
-    )
-    required_visual_evidence = merge_string_lists(
-        record["model_response"].get("required_visual_evidence", []) for record in frame_results
-    )
-    state_transition_evidence = merge_string_lists(
-        record["model_response"].get("state_transition_evidence", []) for record in frame_results
-    )
-    negative_conditions = merge_string_lists(
-        record["model_response"].get("negative_conditions", []) for record in frame_results
-    )
-    not_sufficient_for_completion = merge_string_lists(
-        record["model_response"].get("not_sufficient_for_completion", []) for record in frame_results
-    )
-    common_false_positives = merge_string_lists(
-        record["model_response"].get("common_false_positives", []) for record in frame_results
-    )
-    ambiguous_cases = merge_string_lists(
-        record["model_response"].get("ambiguous_cases", []) for record in frame_results
-    )
-    frame_state_memories = [
-        record["model_response"].get("frame_state_memory", {})
-        for record in frame_results
-        if isinstance(record["model_response"].get("frame_state_memory"), dict)
-    ]
-    subtask_name = first_text_value(
-        record["model_response"].get("subtask_name") for record in frame_results
-    )
-    skill_type_hypothesis = first_text_value(
-        record["model_response"].get("skill_type_hypothesis") for record in frame_results
-    )
-    target_binding = first_json_object(
-        record["model_response"].get("target_binding") for record in frame_results
-    )
-    target_visual_description = first_json_object(
-        record["model_response"].get("target_visual_description") for record in frame_results
-    )
+    frame_observation_schemas = [build_frame_observation_record(record) for record in frame_results]
     timeline = [
         {
             "frame_number": record["frame_number"],
@@ -476,7 +406,12 @@ def summarize_subtask_prior(
             "previous_image_path": record.get("previous_image_path", ""),
             "status_hint": record["model_response"].get("status_hint", ""),
             "frame_reasoning": record["model_response"].get("frame_reasoning", ""),
-            "frame_state_memory": record["model_response"].get("frame_state_memory", {}),
+            "objects": record["model_response"].get("objects", []),
+            "robot_state": record["model_response"].get("robot_state", {}),
+            "scene_context": record["model_response"].get("scene_context", ""),
+            "skill_relevant_observations": record["model_response"].get("skill_relevant_observations", []),
+            "temporal_change_from_previous": record["model_response"].get("temporal_change_from_previous", ""),
+            "uncertainty": record["model_response"].get("uncertainty", []),
         }
         for record in frame_results
     ]
@@ -488,80 +423,108 @@ def summarize_subtask_prior(
         "stage_idx": skill.stage_idx,
         "skill_idx": skill.skill_idx,
         "skill_description": skill.skill_description,
-        "skill_type_hypothesis": skill_type_hypothesis,
-        "subtask_name": subtask_name or skill.skill_description,
-        "target_binding": target_binding,
-        "target_visual_description": target_visual_description,
+        "skill_type_hypothesis": "",
+        "subtask_name": skill.skill_description,
+        "target_binding": {},
+        "target_visual_description": {},
         "object_id": skill.object_id,
         "manuipation_object_id": skill.manuipation_object_id,
         "frame_duration": list(skill.frame_duration),
         "sample_count": len(frame_results),
-        "pre_completion_state": pre_completion_state,
-        "in_progress_state": in_progress_state,
-        "completion_gates": completion_gates,
-        "completion_conditions": completion_conditions,
-        "required_visual_evidence": required_visual_evidence,
-        "state_transition_evidence": state_transition_evidence,
-        "negative_conditions": negative_conditions,
-        "not_sufficient_for_completion": not_sufficient_for_completion,
-        "common_false_positives": common_false_positives,
-        "ambiguous_cases": ambiguous_cases,
-        "frame_state_memories": frame_state_memories,
+        "pre_completion_state": [],
+        "in_progress_state": [],
+        "completion_gates": [],
+        "completion_conditions": [],
+        "required_visual_evidence": [],
+        "state_transition_evidence": [],
+        "negative_conditions": [],
+        "not_sufficient_for_completion": [],
+        "common_false_positives": [],
+        "ambiguous_cases": [],
+        "frame_observation_schemas": frame_observation_schemas,
         "sampled_frame_analysis": timeline,
         "raw_frame_requests": frame_results,
     }
 
 
-def render_running_prior_context(
+def build_frame_observation_record(record: JsonObject) -> JsonObject:
+    model_response = record.get("model_response", {})
+    return {
+        "frame_number": record.get("frame_number"),
+        "image_path": record.get("image_path", ""),
+        "previous_frame_number": record.get("previous_frame_number"),
+        "status_hint": model_response.get("status_hint", ""),
+        "frame_reasoning": model_response.get("frame_reasoning", ""),
+        "objects": model_response.get("objects", []),
+        "robot_state": model_response.get("robot_state", {}),
+        "scene_context": model_response.get("scene_context", ""),
+        "skill_relevant_observations": model_response.get("skill_relevant_observations", []),
+        "temporal_change_from_previous": model_response.get("temporal_change_from_previous", ""),
+        "uncertainty": model_response.get("uncertainty", []),
+    }
+
+
+def render_running_observation_context(
     episode: EpisodeData,
     skill: SkillSpec,
     frame_results: List[JsonObject],
 ) -> str:
-    payload = build_running_prior_context(episode, skill, frame_results)
+    payload = build_running_observation_context(episode, skill, frame_results)
     if not payload:
-        return "No accumulated sampled-frame prior yet."
+        return "No accumulated sampled-frame observations yet."
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
-def build_running_prior_context(
+def build_running_observation_context(
     episode: EpisodeData,
     skill: SkillSpec,
     frame_results: List[JsonObject],
 ) -> JsonObject:
     if not frame_results:
         return {}
-    summary = summarize_subtask_prior(episode, skill, frame_results)
     latest_record = frame_results[-1]
     payload: JsonObject = {
         "description": (
-            "Compact accumulated prior draft from earlier sampled frames for this same skill. "
-            "Use it as mutable context: preserve useful concrete criteria, correct weak items, "
-            "and add new current-frame evidence."
+            "Compact accumulated observation draft from earlier sampled frames for this same skill. "
+            "Use it only to maintain object identity, visible state progression, robot state changes, "
+            "and uncertainty across sampled frames. Do not convert observations into completion rules here."
         ),
         "processed_sample_count": len(frame_results),
         "latest_frame_number": latest_record.get("frame_number"),
         "latest_status_hint": latest_record.get("model_response", {}).get("status_hint", ""),
     }
-    for key in ("skill_type_hypothesis", "target_binding", "subtask_name", "target_visual_description"):
-        value = summary.get(key)
-        if value:
-            payload[key] = value
-    for key in RUNNING_PRIOR_LIST_FIELDS:
-        values = summary.get(key, [])
-        if isinstance(values, list):
-            payload[key] = values[:RUNNING_PRIOR_CONTEXT_MAX_ITEMS]
+    payload["observed_object_names"] = merge_observed_object_names(frame_results)[:RUNNING_PRIOR_CONTEXT_MAX_ITEMS]
+    payload["recent_skill_relevant_observations"] = merge_string_lists(
+        record.get("model_response", {}).get("skill_relevant_observations", []) for record in frame_results
+    )[:RUNNING_PRIOR_CONTEXT_MAX_ITEMS]
+    payload["recent_uncertainty"] = merge_string_lists(
+        record.get("model_response", {}).get("uncertainty", []) for record in frame_results
+    )[:RUNNING_PRIOR_CONTEXT_MAX_ITEMS]
     recent_frames: List[JsonObject] = []
     for record in frame_results[-RUNNING_PRIOR_CONTEXT_RECENT_FRAMES:]:
-        model_response = record.get("model_response", {})
-        recent_frames.append(
-            {
-                "frame_number": record.get("frame_number"),
-                "status_hint": model_response.get("status_hint", ""),
-                "frame_state_memory": model_response.get("frame_state_memory", {}),
-            }
-        )
+        recent_frames.append(build_frame_observation_record(record))
     payload["recent_sampled_frames"] = recent_frames
     return payload
+
+
+def merge_observed_object_names(frame_results: List[JsonObject]) -> List[str]:
+    names: List[str] = []
+    seen = set()
+    for record in frame_results:
+        objects = record.get("model_response", {}).get("objects", [])
+        if not isinstance(objects, list):
+            continue
+        for item in objects:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("object_name") or item.get("name")
+            if not isinstance(name, str):
+                continue
+            normalized = " ".join(name.split()).lower()
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                names.append(name.strip())
+    return names
 
 
 def consolidate_subtask_prior(
@@ -867,20 +830,3 @@ def append_optional_prompt(prompt: str, optional_prompt: str) -> str:
     if not optional_prompt.strip():
         return prompt
     return f"{prompt}\n\n{optional_prompt.strip()}"
-
-
-def first_text_value(values) -> str:
-    for value in values:
-        if value is None:
-            continue
-        text = str(value).strip()
-        if text:
-            return text
-    return ""
-
-
-def first_json_object(values) -> JsonObject:
-    for value in values:
-        if isinstance(value, dict):
-            return value
-    return {}
