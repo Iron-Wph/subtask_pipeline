@@ -149,6 +149,12 @@ These structured fields store the child agent's visual criteria. `generation_pro
 
 Prior generation uses three levels of constraints: `universal_visual_rubric` defines direct visible evidence and target consistency; `action_primitive_rubric` defines generic robot action primitives such as move, pick, place, press, and open/close; `prior_review_rubric` asks the parent agent to audit weak child-agent criteria and false-positive risks for offline review. Large-scale generation does not load these generic rubrics directly; it loads only the child `generation_prompt_guidance` and child structured guardrails for the current skill.
 
+## Ablation Branches
+
+- `codex/schema-summary-endpoints`: baseline experimental branch. Child agents output frame-level observation schemas. The summary agent receives only the first and last sampled frame responses/images. Generation uses child `generation_prompt_guidance`, child structured guardrails, and extra generic action-primitive guardrails.
+- `codex/ablate-open-close-constraints`: removes only explicit open/close-specific constraints. Pick/lift and state-change primitive guardrails are still active during generation.
+- `codex/clean-generation-ablation`: clean generation ablation. Generation does not inject any hard-coded action-primitive guardrail block. Rule 16 uses task context, child `generation_prompt_guidance`, child structured guardrails, and shared generic generation prompt rules.
+
 ## 子任务描述应该包含什么
 
 为了把 `api_gemini_without_wrist.py` 这类脚本改成通用于各个任务的数据生成程序，子任务提示信息应该只描述数据本身的可见判据，不包含通用写作规则或 memory 更新模板；其中 `generation_prompt_guidance` 是例外，它是由这些可见判据改写出来的任务特定自然语言规则，用来替换旧脚本第 16 条里的硬编码任务规则。
@@ -322,24 +328,13 @@ subtask_auto_labeler/generation.py
     非最后一次 move-to 请求会被确定性改成 in_progress / false；
     最后一次 move-to 请求会被确定性改成 completed / true。
 
-  render_action_primitive_generation_guardrails()
-    把 pick-up / grasp / lift、press / toggle / switch、open / close 的通用视觉判据追加到 generation Rule 16；
-    重点约束反光台面、遮挡、顶部/边缘/把手被夹住但物体本体未离开支撑面、按钮被夹爪遮住却被误判成最终颜色、开门任务被附近按钮/开关带偏等问题。
-
   is_move_to_skill()
     判断当前 skill 是否属于 move-to / navigation 类动作。
 
-  is_object_acquisition_prior()
-    根据 child prior 判断当前 skill 是否属于 pick-up / grasp / lift / object-acquisition 类动作，并决定是否追加对应 Rule 16 判据。
 
-  is_state_change_prior()
-    根据 child prior 判断当前 skill 是否属于 press / toggle / switch / turn-on / turn-off 类动作，并决定是否追加对应 Rule 16 判据。
 
-  is_open_close_prior()
-    根据 child prior 判断当前 skill 是否属于 open / close 类动作，并决定是否追加对应 Rule 16 判据。
 ```
 
-如果后续需要增加类似 place 的通用视觉判据，例如必须看到释放并稳定接触目标位置，优先扩展 `render_action_primitive_generation_guardrails()`，让它进入 Rule 16；只有像 move-to 最后一帧这种明确依赖采样边界的规则，才应放到 `build_completion_gate_context()` 或 `apply_hard_completion_gates()` 中。
 
 `--frame-stride` 会复用旧 `api_gemini_without_wrist.py` 的采样方式：先读取 annotation JSON 中的 `valid_duration`，从第一个有效帧开始按 `range(valid_start, valid_end, frame_stride)` 取帧；每个采样帧再根据各 skill 的 `frame_duration` 判断属于哪个 skill，并从对应 `stage_xx/frame_*.jpg` 或 `skill_xx/frame_*.jpg` 目录读取同名图像。因此请确认 `--image-root` 指向包含这些逐帧图像的目录，例如 `.../new_frame_files/task-0000/episode_00000010`。
 
