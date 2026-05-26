@@ -75,13 +75,13 @@ manuipation_object_id 或 manipulating_object_id
 
 ## 1. 生成 Autolabel 提示信息
 
-每个 skill 会在 `frame_duration` 内均匀采样 `k` 帧，默认 `k=10`，不包含起始帧和终止帧。从第二个采样帧开始，prior 请求会同时带上上一采样帧图像和上一轮响应，用于提取更明确的视觉状态转移。
+prior 阶段按每个 skill 的 `frame_duration` 单独采样，不直接生成最终逐帧标签。默认情况下使用 `--sample-k 10`，在该 skill 的 `frame_duration` 内部均匀选取 10 个内部帧，排除起始帧和终止帧。
 
-Each skill first produces frame-level prior candidates, then the child-summary agent consolidates them. List fields default to at least 4 non-duplicate items and can be controlled with `--prior-min-items`. The relevant list fields include `pre_completion_state`, `in_progress_state`, `completion_gates`, `completion_conditions`, `required_visual_evidence`, `state_transition_evidence`, `negative_conditions`, `not_sufficient_for_completion`, `common_false_positives`, and `ambiguous_cases`.
+如果设置 `--prior-frame-stride N`，prior 阶段会改为间隔采样，并且 `--prior-frame-stride` 会覆盖 `--sample-k`。此时每个 skill 的采样帧近似来自 `range(frame_start + 1, frame_end, N)`，仍然受该 skill 的 `frame_duration` 限制，并不是忽略子任务帧范围做全局取帧。
 
-By default, prior sampling uses `--sample-k 10` and samples uniformly inside each skill's `frame_duration`, excluding the boundary frames. For denser temporal evidence, use `--prior-frame-stride 30`; this samples every 30 frames inside each skill range and overrides `--sample-k` for prior generation. Dense prior sampling is useful for short state-change moments where a fixed `k` can miss pre-contact, occlusion, and post-state evidence.
+从第二个采样帧开始，prior 请求会同时带上上一采样帧图像和上一轮响应，用于对比同一 skill 内的可见变化。main 分支的子 agent 在每个采样帧上会直接输出候选 prior 字段，例如 `frame_state_memory`、`target_binding`、`target_visual_description`、`completion_gates`、`completion_conditions`、`required_visual_evidence`、`not_sufficient_for_completion`、`common_false_positives` 和 `ambiguous_cases`。随后 child-summary agent 再把这些逐帧候选字段汇总成最终的 `subtask_XX_prior.json`。
 
-prior 阶段不是直接生成最终逐帧标签，但每个采样帧会保存轻量状态记忆：`frame_reasoning` 和 `frame_state_memory`。其中 `frame_state_memory` 记录目标部件当前状态、机器人与目标部件的空间/接触关系、相对上一采样帧的变化和不确定性。后续汇总时会用这些帧级状态信息生成更稳定的完成条件。
+`--prior-min-items` 控制最终列表字段的最少条数，默认至少 4 条，适用于 `pre_completion_state`、`in_progress_state`、`completion_gates`、`completion_conditions`、`required_visual_evidence`、`state_transition_evidence`、`negative_conditions`、`not_sufficient_for_completion`、`common_false_positives` 和 `ambiguous_cases`。
 
 ```bash
 python api_subtask_auto_label.py prior \
@@ -106,7 +106,7 @@ outputs/episode_0001/prior/
 
 `autolabel_prompt_info.json` 是 `generate_dataset.py` 的首选输入。`task_prior.json` 是同一份 prior 信息的主文件；正常情况下两者内容一致。父 agent 审查阶段会按 `--parent-prior-attempts` 做多轮完整请求，默认 3 轮；每一轮完整请求内部仍然会按 `--max-response-retries` 处理无效 JSON 修复。如果父 agent 多轮后仍返回无效 JSON 或 API 报错，但所有子 agent prior 已经完成，程序会自动写出 child-only fallback 的 `task_prior.json` 和 `autolabel_prompt_info.json`，其中 `status` 为 `parent_failed_child_fallback`，`usable_for_generation` 为 `true`。这种 fallback 仍可用于 generation，因为逐帧 generation 默认只读取 child prior 的 `generation_prompt_guidance` 和结构化 guardrails，父 agent 审查字段不作为 generation 规则注入。
 
-Prompt information structure for each skill:
+每个 skill 的提示信息结构：
 
 ```json
 {
@@ -147,9 +147,9 @@ Prompt information structure for each skill:
 }
 ```
 
-These structured fields store the child agent's visual criteria. `generation_prompt_guidance` is the child agent's main natural-language Rule 16 guidance after sampled-frame consolidation; it is not a raw key/value dump. The parent agent acts as a reviewer and QA annotator only; parent review fields are saved for inspection and are not injected into frame-level generation prompts. To avoid information loss when inspecting `model_response.skills`, each parent review skill also includes a `child_prior_snapshot` copied from the child prior with the key completion, negative, no_for_sure, false-positive, and guidance fields. Generic memory format, output JSON format, actor naming, and status rules still come from the shared `generate_dataset.py` prompt.
+这些结构化字段保存子 agent 总结出的视觉判据。`generation_prompt_guidance` 是子 agent 在采样帧汇总后生成的自然语言 Rule 16 判据，不是把 JSON key/value 原样塞进 prompt。父 agent 只负责审查和 QA 标注；父 agent 的审查字段会保存到 JSON 中供检查，但不会注入逐帧 generation prompt。为了检查 `model_response.skills` 时不丢失子 agent 结果，每个父 agent review 条目还会包含一个 `child_prior_snapshot`，其中复制了 child prior 的完成条件、否定条件、no_for_sure、误判风险和 guidance 字段。通用 memory 格式、输出 JSON 格式、机器人主体命名和状态枚举仍由共享的 `generate_dataset.py` prompt 提供。
 
-Prior generation uses three levels of constraints: `universal_visual_rubric` defines direct visible evidence and target consistency; `action_primitive_rubric` defines generic robot action primitives such as move, pick, place, press, and open/close; `prior_review_rubric` asks the parent agent to audit weak child-agent criteria and false-positive risks for offline review. Large-scale generation does not load these generic rubrics directly; it loads only the child `generation_prompt_guidance` and child structured guardrails for the current skill.
+prior 生成包含三层约束：`universal_visual_rubric` 约束直接视觉证据和目标一致性；`action_primitive_rubric` 约束 move、pick、place、press、open/close 等通用机器人动作；`prior_review_rubric` 要求父 agent 审查子 agent 判据是否过弱、是否有误判风险。大规模 generation 不会直接加载这些通用 rubric，而是只读取当前 skill 的 child `generation_prompt_guidance` 和 child structured guardrails。
 
 ## 子任务描述应该包含什么
 
@@ -158,23 +158,23 @@ Prior generation uses three levels of constraints: `universal_visual_rubric` def
 建议每个 skill 至少包含：
 
 ```text
-skill_idx                       Subtask index.
-skill_description               Original action description from annotation.
-skill_type_hypothesis           Child-agent action primitive, such as move_to / object_acquisition / object_placement / state_change_press_toggle.
-target_binding                  Binding for object, part, manipulated object, support surface or target location, robot effector, visible attributes, and count.
-subtask_name                    Short executable subtask name: verb + target object.
-target_visual_description       Visible target attributes such as color, shape, position, size, and count.
-pre_completion_state            Visible state before completion; added to generation Rule 16 as child structured guardrails.
-in_progress_state               Progress states that must not be marked completed; added to generation Rule 16 as child structured guardrails.
-completion_gates                Decisive visible gates that must all hold before completed is allowed.
-completion_conditions           Semantic postconditions for the skill.
-required_visual_evidence        Direct visual evidence required before marking completed.
-state_transition_evidence       Before/after visual changes when temporal comparison is relevant.
-negative_conditions             Visible conditions that mean the skill is not completed.
-not_sufficient_for_completion   Intermediate patterns that are not enough, such as reaching, hovering, touching, occlusion, or edge-only contact.
-common_false_positives          Visual patterns that may look completed but are insufficient.
-ambiguous_cases                 Cases that should be handled conservatively as no_for_sure.
-generation_prompt_guidance      Main natural-language Rule 16 guidance generated by the child agent.
+skill_idx                       子任务索引。
+skill_description               annotation 中的原始动作描述。
+skill_type_hypothesis           子 agent 判断出的动作类型，例如 move_to / object_acquisition / object_placement / state_change_press_toggle。
+target_binding                  目标绑定信息，包括物体、部件、操作对象、支撑面或目标位置、机器人末端执行器、可见属性和数量。
+subtask_name                    简短可执行子任务名，通常是动词加目标对象。
+target_visual_description       目标的可见属性，例如颜色、形状、位置、大小和数量。
+pre_completion_state            完成前的可见状态，会作为 child structured guardrails 加入 generation Rule 16。
+in_progress_state               有进展但不能标为完成的状态，会作为 child structured guardrails 加入 generation Rule 16。
+completion_gates                允许输出 completed 前必须同时满足的决定性可见门槛。
+completion_conditions           当前 skill 的语义完成后置条件。
+required_visual_evidence        输出 completed 前必须看到的直接视觉证据。
+state_transition_evidence       需要时记录完成前后的可见状态变化。
+negative_conditions             表示当前 skill 未完成的可见条件。
+not_sufficient_for_completion   中间过程但不足以判完成的模式，例如接近、悬停、接触、遮挡、只夹住边缘。
+common_false_positives          看起来像完成但证据不足的常见误判模式。
+ambiguous_cases                 应保守处理为 no_for_sure 的模糊情况。
+generation_prompt_guidance      子 agent 生成的自然语言 Rule 16 主判据。
 ```
 
 描述原则：
@@ -246,25 +246,25 @@ generation_prompt_guidance      Main natural-language Rule 16 guidance generated
 }
 ```
 
-Generation does not paste the full `autolabel_prompt_info.json` into Gemini, and it does not paste raw structured key/value JSON into the prompt. The flow is now: the child agent generates the main `generation_prompt_guidance`; the parent agent returns QA review fields that are saved in JSON but not used as generation-time rules.
+Generation 不会把完整的 `autolabel_prompt_info.json` 原样粘贴进 Gemini，也不会把结构化 key/value JSON 原封不动塞进 prompt。当前流程是：子 agent 生成主要的 `generation_prompt_guidance`，父 agent 返回 QA 审查字段；父 agent 字段会保存到 JSON 里，但不作为 generation 阶段的任务规则。
 
-Parent review output should not be used directly as Rule 16 guidance. It is intentionally an audit record. The detailed generation criteria remain in `subtask_priors` and are mirrored under each parent review item's `child_prior_snapshot`.
+父 agent 的 review 输出不应直接作为 Rule 16 判据使用。它是审查记录；详细 generation 判据仍保存在 `subtask_priors` 中，并且会镜像到每个父 agent review 条目的 `child_prior_snapshot` 下。
 
-Generation reads the child `generation_prompt_guidance`, then appends `pre_completion_state`, `in_progress_state`, `completion_gates`, and `not_sufficient_for_completion` as child structured guardrails. If an old prior file lacks child `generation_prompt_guidance`, the code falls back to rendering natural guidance from the child structured fields.
+Generation 会读取 child `generation_prompt_guidance`，并追加 `pre_completion_state`、`in_progress_state`、`completion_gates` 和 `not_sufficient_for_completion` 作为 child structured guardrails。如果旧 prior 文件缺少 child `generation_prompt_guidance`，代码会从 child structured fields 回退渲染自然语言 guidance。
 
-When `--save-rendered-prompts` is enabled, the saved prompt shows these rendered section titles. They are generated by `generation.py`; they are not literal JSON keys in `autolabel_prompt_info.json`.
+打开 `--save-rendered-prompts` 后，保存的 prompt 会展示这些渲染后的分节标题。这些标题由 `generation.py` 生成，不是 `autolabel_prompt_info.json` 中的原始 JSON key。
 
 Generation 还会在通用 prompt 里加入 atomic skill scope 约束：`subtask` 和 `new_memory.Progress` 必须沿用当前 candidate skill 的原子动作和目标对象，不能把可见但未标注的机制动作写成当前任务。例如当前 skill 是 `open the microwave door` 时，即使机器人夹爪靠近红色释放按钮，Progress 也应写“robot is trying to open the microwave door, but the door remains closed/unclear”，而不是“robot is pressing the red release button to open the door”。按钮可以出现在 `World state` 中作为客观场景信息，但不能成为当前 subtask 或完成证据。
 
 ```text
-Primary child-agent skill guidance for the current candidate skill:
-  Comes from child_prior.generation_prompt_guidance.
+当前 candidate skill 的子 agent 主判据：
+  来自 child_prior.generation_prompt_guidance。
 
-Child-agent structured visual state guardrails:
-  Comes from child_prior.pre_completion_state,
+子 agent 结构化视觉状态约束：
+  来自 child_prior.pre_completion_state,
   child_prior.in_progress_state,
   child_prior.completion_gates,
-  and child_prior.not_sufficient_for_completion.
+  以及 child_prior.not_sufficient_for_completion。
 ```
 
 ### 通用硬性完成规则
@@ -343,17 +343,17 @@ subtask_auto_labeler/generation.py
 
 如果后续需要增加类似 place 的通用视觉判据，例如必须看到释放并稳定接触目标位置，优先扩展 `render_action_primitive_generation_guardrails()`，让它进入 Rule 16；只有像 move-to 最后一帧这种明确依赖采样边界的规则，才应放到 `build_completion_gate_context()` 或 `apply_hard_completion_gates()` 中。
 
-`--frame-stride` 会复用旧 `api_gemini_without_wrist.py` 的采样方式：先读取 annotation JSON 中的 `valid_duration`，从第一个有效帧开始按 `range(valid_start, valid_end, frame_stride)` 取帧；每个采样帧再根据各 skill 的 `frame_duration` 判断属于哪个 skill，并从对应 `stage_xx/frame_*.jpg` 或 `skill_xx/frame_*.jpg` 目录读取同名图像。因此请确认 `--image-root` 指向包含这些逐帧图像的目录，例如 `.../new_frame_files/task-0000/episode_00000010`。
+generation 阶段的 `--frame-stride` 会复用旧 `api_gemini_without_wrist.py` 的采样方式：先读取 annotation JSON 中的 `valid_duration`，从第一个有效帧开始按 `range(valid_start, valid_end, frame_stride)` 全局取帧；每个采样帧再根据各 skill 的 `frame_duration` 判断属于哪个 skill，并从对应 `stage_xx/frame_*.jpg` 或 `skill_xx/frame_*.jpg` 目录读取同名图像。因此请确认 `--image-root` 指向包含这些逐帧图像的目录，例如 `.../new_frame_files/task-0000/episode_00000010`。这和 prior 阶段的 `--prior-frame-stride` 不同：`--prior-frame-stride` 是在每个 skill 自己的 `frame_duration` 内部间隔采样。
 
-Internal fields used by generation:
+generation 实际读取的字段：
 
 ```text
-global prior:
+全局 prior：
   task_name
   prior_min_items
   task_summary
 
-current skill prior:
+当前 skill prior：
   child_prior
     stage_idx / skill_idx / skill_description / skill_type_hypothesis / subtask_name
     target_binding / target_visual_description
@@ -364,17 +364,17 @@ current skill prior:
     generation_prompt_guidance
 ```
 
-`raw_frame_requests`, sampled-frame analysis logs, Gemini metadata, the full child prior list, and parent review fields are not sent to each frame request.
+`raw_frame_requests`、采样帧分析日志、Gemini metadata、完整 child prior 列表和父 agent review 字段都不会发送给每一次逐帧 generation 请求。
 
 ```text
-Generic judgment logic:
-  Stays in generation_user rules 1-15 and 17-19.
+通用判断逻辑：
+  保留在 generation_user 的第 1-15 条和第 17-19 条规则中。
 
-Task-specific visual criteria:
-  Uses child `generation_prompt_guidance` as the main Rule 16 criteria and appends child structured guardrails only.
+任务特定视觉判据：
+  使用 child `generation_prompt_guidance` 作为 Rule 16 主判据，并只追加 child structured guardrails。
 ```
 
-Rule 16 example:
+Rule 16 示例：
 
 ```text
 16. Use these task-specific visible postconditions as guidance.
@@ -407,11 +407,11 @@ outputs/episode_0001/generation/
 `.md` 文件会把内容分块显示：
 
 ```text
-Request Metadata
-Prompt Values Injected Into Template
-Completion Guidance Injected As Rule 16
-System Instruction
-Full User Prompt
+请求元数据
+注入模板的 prompt 字段
+作为 Rule 16 注入的完成判据
+System 指令
+完整 User Prompt
 ```
 
 这样可以直接看出 `task_name`、`skill_description`、`object_id`、`frame_duration`、`completion_guidance` 等字段分别如何进入最终 prompt，而不是只看到 JSON 字符串转义后的长文本。
@@ -597,7 +597,9 @@ generation_user
 --max-output-tokens         最大输出 token
 --max-retries              API 错误重试次数
 --max-response-retries      无效 JSON 响应重试次数
---sample-k                  prior 阶段每个 skill 的均匀采样帧数
+--sample-k                  prior 阶段每个 skill 的均匀采样帧数；仅在未设置 --prior-frame-stride 时生效
+--prior-frame-stride        prior 阶段在每个 skill 的 frame_duration 内按 N 帧间隔采样；设置后覆盖 --sample-k
+--frame-stride              generation 阶段从 valid_duration 开始按 N 帧间隔全局采样，再映射到所属 skill
 --prior-min-items           prior 阶段每个 skill 列表字段的最少条数，默认 4
 --parent-prior-attempts     父 agent 完整请求重试轮数，默认 3；全部失败后写 child-only fallback
 --request-delay             每次请求后的等待秒数
