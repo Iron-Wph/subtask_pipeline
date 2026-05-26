@@ -147,7 +147,11 @@ Prompt information structure for each skill:
 
 These structured fields store the child agent's visual criteria. `generation_prompt_guidance` is the child agent's main natural-language Rule 16 guidance after sampled-frame consolidation; it is not a raw key/value dump. The parent agent acts as a reviewer and QA annotator only; parent review fields are saved for inspection and are not injected into frame-level generation prompts. To avoid information loss when inspecting `model_response.skills`, each parent review skill also includes a `child_prior_snapshot` copied from the child prior with the key completion, negative, no_for_sure, false-positive, and guidance fields. Generic memory format, output JSON format, actor naming, and status rules still come from the shared `generate_dataset.py` prompt.
 
-Prior generation uses three levels of constraints: `universal_visual_rubric` defines direct visible evidence and target consistency; `action_primitive_rubric` defines generic robot action primitives such as move, pick, place, press, and open/close; `prior_review_rubric` asks the parent agent to audit weak child-agent criteria and false-positive risks for offline review. Large-scale generation does not load these generic rubrics directly; it loads only the child `generation_prompt_guidance` and child structured guardrails for the current skill.
+Prior generation uses three levels of constraints: `universal_visual_rubric` defines direct visible evidence and target consistency; `action_primitive_rubric` defines generic robot action primitives such as move, pick, place, and press; `prior_review_rubric` asks the parent agent to audit weak child-agent criteria and false-positive risks for offline review. Large-scale generation does not load these generic rubrics directly; it loads only the child `generation_prompt_guidance` and child structured guardrails for the current skill.
+
+## Ablation Branch: Open/Close Constraints Removed
+
+This branch is for testing the effect of removing explicit open/close-specific constraints. Compared with `codex/schema-summary-endpoints`, it removes the open/close frame-level few-shot, the summary-agent open/close terminal-geometry rule, the open/close action primitive rubric, the parent-review open/close audit rule, and the generation-time open/close guardrail. Generic direct-evidence, target-consistency, object-state, robot-state, and uncertainty rules remain active.
 
 ## 子任务描述应该包含什么
 
@@ -187,7 +191,6 @@ generation_prompt_guidance      Main natural-language Rule 16 guidance generated
 7. 不要只写 `visible state change`、`indicator turns on`、`button is pressed` 这类泛化短语；应写清楚同一个目标部件的颜色、形状、位置和前后状态，例如 “the same small circular power button changes from red to green”。
 8. 不要单独使用 `indicator`、`button`、`it` 这类指代不明的词；每条条件都应写完整目标对象和目标部件，例如 “the radio small circular power button on the top control area”。
 9. `target_visual_description` 是后续字段的一致性来源。若其中写了颜色前后状态，例如 `red before completion, green after completion`，则完成条件必须写同一目标部件的最终颜色，状态转移必须写同一目标部件的前后颜色变化；不能再引入未确认的第二个灯、孔、按钮或开关。
-10. `skill_description`、`object_id`、`manuipation_object_id` 定义当前子任务的原子动作和原子操作对象。不要因为画面里出现按钮、开关、把手、指示灯或控制面板，就把 open/close 改写成 press/switch，或把这些非目标机制写成当前子任务目标；它们只能作为误判项、非充分条件或场景状态出现。
 ```
 
 例如 `press the radio button` 这类 skill，好的描述应该包含：
@@ -300,15 +303,6 @@ press / toggle / switch / turn-on / turn-off / state-change skill:
   如果目标部件被夹爪遮挡、只露出边缘或一小块、颜色正在红绿过渡、颜色混合/过曝/阴影/模糊/反光，或可能来自附近灯光、墙上信号、炉灶按钮、反射或非目标标记，应输出 no_for_sure 或 in_progress。
   不能声称 red-to-green 或 off-to-on transition，除非当前图像清楚看到同一个目标部件已经处于最终状态。
 
-open / close skill:
-  只根据当前 skill 绑定的同一个可活动部件判断，例如门、盖子、抽屉、面板、翻盖、门边、铰链侧、把手侧或开口区域。
-  open 需要看到该部件相对框架分离，并且门/盖/面板角度清楚显示打开状态。
-  如果 skill 或 child prior 语义是 fully open / open completely / open wide enough for access，
-  必须看到较大的稳定开口并且内部或目标区域可访问；只开一条缝、释放门锁、门体半开都不是完成。
-  透过透明门窗、反射或前面板看到内部物体，不等于门/盖/面板已经打开。
-  close 需要看到该部件与框架齐平或对齐，并且开口不再可见。
-  抓住把手、触碰门面、靠近边缘、按下附近按钮/开关/指示灯、看到灯光或颜色变化，都不能作为 open/close 的完成证据，除非 annotation 明确把这些控件作为当前 skill 的目标部件。
-  如果门边、铰链、开口、把手侧缝隙、实际开口区域或闭合缝被遮挡、裁切、反光、模糊或几何关系不清楚，应输出 no_for_sure，而不是 completed。
 ```
 
 实现位置：
@@ -335,8 +329,6 @@ subtask_auto_labeler/generation.py
   is_state_change_prior()
     根据 child prior 判断当前 skill 是否属于 press / toggle / switch / turn-on / turn-off 类动作，并决定是否追加对应 Rule 16 判据。
 
-  is_open_close_prior()
-    根据 child prior 判断当前 skill 是否属于 open / close 类动作，并决定是否追加对应 Rule 16 判据。
 ```
 
 如果后续需要增加类似 place 的通用视觉判据，例如必须看到释放并稳定接触目标位置，优先扩展 `render_action_primitive_generation_guardrails()`，让它进入 Rule 16；只有像 move-to 最后一帧这种明确依赖采样边界的规则，才应放到 `build_completion_gate_context()` 或 `apply_hard_completion_gates()` 中。

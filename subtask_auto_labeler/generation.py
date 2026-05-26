@@ -816,8 +816,8 @@ def render_action_primitive_generation_guardrails(child_prior: JsonObject) -> st
         return (
             "For press, toggle, switch, turn-on, turn-off, or state-change labeling, completion requires "
             "the exact target part to be directly visible in the current image with the required final "
-            "state. The same target button, switch, indicator, display, or movable part named by the "
-            "current skill must show the final color, light, depression, pose, aperture, or on/off state. "
+            "state. The same target button, switch, indicator, or display named by the current skill "
+            "must show the final color, light, depression, pose, or on/off state. "
             "Robot contact, a pressing motion, the gripper still touching the target, a task sequence, or "
             "previous memory is not enough. For color or light changes, do not mark completed when the "
             "target part is covered by the gripper or only partly visible, when the color is changing, "
@@ -825,28 +825,8 @@ def render_action_primitive_generation_guardrails(child_prior: JsonObject) -> st
             "final color could come from a nearby light, reflection, colored mark, wall signal, stove "
             "control, or other non-target part. If the target state region is occluded, cropped, blurred, "
             "reflective, glare-covered, or ambiguous, use no_for_sure instead of completed. Do not claim "
-            "a red-to-green, off-to-on, open-to-closed, or similar transition unless the current image "
+            "a red-to-green, off-to-on, or similar transition unless the current image "
             "clearly shows the same target part in the final state."
-        )
-    if is_open_close_prior(child_prior):
-        return (
-            "For open or close labeling, bind completion to the movable part itself: the door, lid, "
-            "drawer, panel, flap, cover, hinge side, handle side, or aperture named by the current skill. "
-            "The candidate skill can be completed only when the current image clearly shows the same "
-            "movable part in the required final geometry. For open, this means the door/lid/panel is "
-            "visibly separated from its frame and the aperture angle clearly shows an open state. If the "
-            "skill or child prior says fully open, open completely, or open wide enough for access, require "
-            "a large, stable opening that gives unobstructed access to the interior or target region; a "
-            "small crack, latch release, or partially open pose is still in_progress or no_for_sure. Seeing "
-            "an object or interior through a transparent door, window, reflection, or front panel is not "
-            "evidence that the door/lid/panel is open. For close, this means the movable part is visibly flush "
-            "or aligned with the frame and the opening is no longer visible. Robot contact with a handle, "
-            "edge, door face, side panel, control panel, nearby button, switch, indicator, light, knob, or "
-            "colored mark is not completion evidence unless the same movable part's open/closed geometry "
-            "is visible. Do not reinterpret an open/close skill as pressing a button or turning on a device "
-            "just because a button, switch, indicator, or light appears near the robot gripper. If the door "
-            "edge, hinge, aperture, handle-side gap, actual opening, or closed seam is occluded, cropped, "
-            "reflective, blurred, or ambiguous, use no_for_sure instead of completed."
         )
     return ""
 
@@ -885,27 +865,6 @@ def is_state_change_prior(child_prior: JsonObject) -> bool:
         "switch",
         "turn on",
         "turn off",
-    )
-    return any(pattern in text for pattern in patterns)
-
-
-def is_open_close_prior(child_prior: JsonObject) -> bool:
-    skill_type = normalize_action_text(child_prior.get("skill_type_hypothesis"))
-    if "open close" in skill_type:
-        return True
-    candidates = [
-        child_prior.get("skill_description"),
-        child_prior.get("subtask_name"),
-    ]
-    text = f" {' '.join(normalize_action_text(value) for value in candidates)} "
-    if " close to " in text or " move close " in text:
-        return False
-    patterns = (
-        " open ",
-        " opening ",
-        " close ",
-        " closing ",
-        " shut ",
     )
     return any(pattern in text for pattern in patterns)
 
