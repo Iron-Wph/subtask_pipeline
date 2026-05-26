@@ -75,19 +75,11 @@ manuipation_object_id 或 manipulating_object_id
 
 ## 1. 生成 Autolabel 提示信息
 
-每个 skill 会在 `frame_duration` 内均匀采样 `k` 帧，默认 `k=10`，不包含起始帧和终止帧。从第二个采样帧开始，prior 请求会同时带上上一采样帧图像和上一轮响应，用于提取更明确的视觉状态转移。
+Prior generation samples each skill inside its own `frame_duration`. By default, `--sample-k 10` uniformly selects internal frames for that skill. If `--prior-frame-stride N` is set, it overrides `--sample-k` and samples every N frames inside the same skill range.
 
-Autolabel 子 agent 现在采用 schema-first 工作方式：frame-level 请求只输出观测 schema，不直接输出 `completion_conditions`、`completion_gates`、`negative_conditions`、`common_false_positives` 或 `generation_prompt_guidance`。每个采样帧会记录 `objects`、`robot_state`、`scene_context`、`skill_relevant_observations`、`temporal_change_from_previous`、`uncertainty` 和 `status_hint`。
+This experimental branch uses a schema-first child agent. Frame-level requests output observation schema only: `objects`, `robot_state`, `scene_context`, `skill_relevant_observations`, `temporal_change_from_previous`, `uncertainty`, and `status_hint`. They do not directly output `completion_conditions`, `completion_gates`, false-positive rules, or `generation_prompt_guidance`.
 
-`objects` 中要求描述物体名字、物体信息、物体当前状态、颜色、形状/材质、相对位置关系、和其它物体或支撑面的关系、可见性/遮挡情况；`robot_state` 描述左右机械臂、末端执行器、接触/抓取/支撑关系、运动姿态和不确定性。
-
-这里的“全局规则生成”发生在 child-summary agent 阶段：它会读取该子任务全部采样帧的观测 schema，把这些帧当作一个 mini trajectory，总结出 pre-completion、in-progress、terminal/final observed state，再生成 `completion_gates`、`completion_conditions`、`required_visual_evidence`、`not_sufficient_for_completion`、`common_false_positives`、`ambiguous_cases` 和 `generation_prompt_guidance`。例如 open-door 轨迹如果最后几帧显示门固定打开到约 90 度，那么完成条件应要求 full/wide stable opening，而不是把早期半开、小缝、按到旁边按钮当成完成。
-
-Each skill first produces frame-level observation schemas, then the child-summary agent consolidates the whole sampled trajectory into final prior fields. List fields default to at least 4 non-duplicate items and can be controlled with `--prior-min-items`. The final list fields include `pre_completion_state`, `in_progress_state`, `completion_gates`, `completion_conditions`, `required_visual_evidence`, `state_transition_evidence`, `negative_conditions`, `not_sufficient_for_completion`, `common_false_positives`, and `ambiguous_cases`.
-
-By default, prior sampling uses `--sample-k 10` and samples uniformly inside each skill's `frame_duration`, excluding the boundary frames. For denser temporal evidence, use `--prior-frame-stride 30`; this samples every 30 frames inside each skill range and overrides `--sample-k` for prior generation. Dense prior sampling is useful for short state-change moments where a fixed `k` can miss pre-contact, occlusion, and post-state evidence.
-
-prior 阶段不是直接生成最终逐帧标签。frame-level schema 只保存可见事实，后续汇总时才把这些事实转写成更严格的完成条件和误判条件。
+The child-summary agent receives only the first sampled-frame image/response and the last sampled-frame image/response. Intermediate frame responses remain saved in `raw_frame_requests` for offline inspection, but they are not injected into the summary prompt in this branch. The summary agent compares the start and end observations to produce `completion_gates`, `completion_conditions`, `required_visual_evidence`, `not_sufficient_for_completion`, `common_false_positives`, `ambiguous_cases`, and `generation_prompt_guidance`.
 
 ```bash
 python api_subtask_auto_label.py prior \

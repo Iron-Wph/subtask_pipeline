@@ -1,7 +1,7 @@
 import json
 import time
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from .checkpoint import checkpoint_status, error_to_json, save_checkpoint
 from .dataset import EpisodeData, SkillSpec, load_episode, sample_subtask_images
@@ -537,6 +537,7 @@ def consolidate_subtask_prior(
     prior_min_items: int,
 ) -> JsonObject:
     system_instruction = prompt_catalog.get("subtask_prior_summary_system")
+    summary_input, summary_image_paths = build_summary_endpoint_payload(preliminary_prior)
     prompt_values = {
         "task_name": episode.task_name,
         "stage_idx": skill.stage_idx,
@@ -546,7 +547,7 @@ def consolidate_subtask_prior(
         "manuipation_object_id": skill.manuipation_object_id,
         "frame_duration": list(skill.frame_duration),
         "prior_min_items": prior_min_items,
-        "preliminary_prior_json": json.dumps(preliminary_prior, ensure_ascii=False, indent=2),
+        "preliminary_prior_json": json.dumps(summary_input, ensure_ascii=False, indent=2),
         "universal_visual_rubric": prompt_catalog.render_optional("universal_visual_rubric", {}),
         "action_primitive_rubric": prompt_catalog.render_optional("action_primitive_rubric", {}),
         "prior_review_rubric": prompt_catalog.render_optional("prior_review_rubric", {}),
@@ -563,6 +564,7 @@ def consolidate_subtask_prior(
     response, metadata = gemini_client.generate_json(
         system_instruction=system_instruction,
         prompt=prompt,
+        image_paths=summary_image_paths,
         required_keys=SUBTASK_SUMMARY_KEYS,
     )
     response = sanitize_visual_guidance(response)
@@ -574,6 +576,44 @@ def consolidate_subtask_prior(
     if metadata:
         consolidated["summary_google_response_metadata"] = metadata
     return sanitize_visual_guidance(consolidated)
+
+
+def build_summary_endpoint_payload(preliminary_prior: JsonObject) -> Tuple[JsonObject, List[Path]]:
+    frame_results = preliminary_prior.get("raw_frame_requests", [])
+    if not isinstance(frame_results, list) or not frame_results:
+        return preliminary_prior, []
+
+    first_record = frame_results[0]
+    last_record = frame_results[-1]
+    first_observation = build_frame_observation_record(first_record)
+    last_observation = build_frame_observation_record(last_record)
+    summary_input: JsonObject = {
+        "agent_type": preliminary_prior.get("agent_type", "subtask_prior_agent"),
+        "task_name": preliminary_prior.get("task_name", ""),
+        "stage_idx": preliminary_prior.get("stage_idx"),
+        "skill_idx": preliminary_prior.get("skill_idx"),
+        "skill_description": preliminary_prior.get("skill_description", ""),
+        "object_id": preliminary_prior.get("object_id", ""),
+        "manuipation_object_id": preliminary_prior.get("manuipation_object_id", ""),
+        "frame_duration": preliminary_prior.get("frame_duration", []),
+        "sample_count": preliminary_prior.get("sample_count", len(frame_results)),
+        "summary_sampling_policy": (
+            "Only the first and last sampled-frame observation responses are sent to the "
+            "summary agent in this experimental branch."
+        ),
+        "first_observation": first_observation,
+        "last_observation": last_observation,
+    }
+
+    image_paths: List[Path] = []
+    for record in (first_record, last_record):
+        image_path = record.get("image_path", "")
+        if not image_path:
+            continue
+        path = Path(str(image_path))
+        if path not in image_paths:
+            image_paths.append(path)
+    return summary_input, image_paths
 
 
 def run_parent_prior(
