@@ -18,7 +18,6 @@ SUBTASK_FRAME_KEYS = {
     "skill_relevant_observations",
     "temporal_change_from_previous",
     "uncertainty",
-    "status_hint",
 }
 SUBTASK_SUMMARY_KEYS = {
     "skill_type_hypothesis",
@@ -404,7 +403,6 @@ def summarize_subtask_prior(
             "image_path": record["image_path"],
             "previous_frame_number": record.get("previous_frame_number"),
             "previous_image_path": record.get("previous_image_path", ""),
-            "status_hint": record["model_response"].get("status_hint", ""),
             "frame_reasoning": record["model_response"].get("frame_reasoning", ""),
             "objects": record["model_response"].get("objects", []),
             "robot_state": record["model_response"].get("robot_state", {}),
@@ -453,7 +451,6 @@ def build_frame_observation_record(record: JsonObject) -> JsonObject:
         "frame_number": record.get("frame_number"),
         "image_path": record.get("image_path", ""),
         "previous_frame_number": record.get("previous_frame_number"),
-        "status_hint": model_response.get("status_hint", ""),
         "frame_reasoning": model_response.get("frame_reasoning", ""),
         "objects": model_response.get("objects", []),
         "robot_state": model_response.get("robot_state", {}),
@@ -491,7 +488,6 @@ def build_running_observation_context(
         ),
         "processed_sample_count": len(frame_results),
         "latest_frame_number": latest_record.get("frame_number"),
-        "latest_status_hint": latest_record.get("model_response", {}).get("status_hint", ""),
     }
     payload["observed_object_names"] = merge_observed_object_names(frame_results)[:RUNNING_PRIOR_CONTEXT_MAX_ITEMS]
     payload["recent_skill_relevant_observations"] = merge_string_lists(

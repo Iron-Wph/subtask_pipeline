@@ -77,7 +77,7 @@ manuipation_object_id 或 manipulating_object_id
 
 Prior generation samples each skill inside its own `frame_duration`. By default, `--sample-k 10` uniformly selects internal frames for that skill. If `--prior-frame-stride N` is set, it overrides `--sample-k` and samples every N frames inside the same skill range.
 
-This experimental branch uses a schema-first child agent. Frame-level requests output observation schema only: `objects`, `robot_state`, `scene_context`, `skill_relevant_observations`, `temporal_change_from_previous`, `uncertainty`, and `status_hint`. They do not directly output `completion_conditions`, `completion_gates`, false-positive rules, or `generation_prompt_guidance`.
+This experimental branch uses a schema-first child agent. Frame-level requests output observation schema only: `frame_reasoning`, `objects`, `robot_state`, `scene_context`, `skill_relevant_observations`, `temporal_change_from_previous`, and `uncertainty`. They do not directly output `completion_conditions`, `completion_gates`, false-positive rules, status labels, or `generation_prompt_guidance`.
 
 The child-summary agent receives only the first sampled-frame image/response and the last sampled-frame image/response. Intermediate frame responses remain saved in `raw_frame_requests` for offline inspection, but they are not injected into the summary prompt in this branch. The summary agent compares the start and end observations to produce `completion_gates`, `completion_conditions`, `required_visual_evidence`, `not_sufficient_for_completion`, `common_false_positives`, `ambiguous_cases`, and `generation_prompt_guidance`.
 
