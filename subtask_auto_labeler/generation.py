@@ -752,19 +752,19 @@ def build_completion_guidance(global_prompt_info: JsonObject, subtask_prior: Jso
             ]
         )
         if natural_guidance:
-            lines.append("Primary child-agent skill guidance for the current candidate skill:")
+            lines.append("Primary child-agent visual postcondition notes for the current candidate skill:")
             lines.append(sanitize_visual_guidance_text(natural_guidance))
         else:
             lines.append(render_skill_prior_as_natural_guidance(child_prior))
         child_state_guidance = render_child_structured_guardrails(child_prior)
         if child_state_guidance:
             lines.append("")
-            lines.append("Child-agent structured visual state guardrails:")
+            lines.append("Child-agent structured visual state notes:")
             lines.append(child_state_guidance)
         action_guardrails = render_action_primitive_generation_guardrails(child_prior)
         if action_guardrails:
             lines.append("")
-            lines.append("Generic action primitive visual criteria:")
+            lines.append("Generic action primitive visual notes:")
             lines.append(action_guardrails)
     else:
         if lines:
@@ -776,8 +776,8 @@ def build_completion_guidance(global_prompt_info: JsonObject, subtask_prior: Jso
 
     lines.append("")
     lines.append(
-        "Treat these task-specific rules as judging criteria, not as visual evidence; "
-        "the current image and the previous memory still decide the label. "
+        "This section describes what visual facts to look for; it is not visual evidence. "
+        "The current image and the previous memory still decide the label. "
         "Mark the candidate skill completed only when every decisive completion gate is directly visible "
         "in the current image. If the current image still matches a before-completion state, an in-progress "
         "state, or an insufficient-progress pattern, do not mark completed. If the decisive result state is "
