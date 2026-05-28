@@ -37,6 +37,7 @@ SKILL_PRIOR_KEYS = (
     "subtask_name",
     "target_binding",
     "target_visual_description",
+    "action_change_process",
     "pre_completion_state",
     "in_progress_state",
     "completion_gates",
@@ -1010,6 +1011,12 @@ def is_open_close_prior(child_prior: JsonObject) -> bool:
 
 def render_child_structured_guardrails(child_prior: JsonObject) -> str:
     lines: List[str] = []
+    action_change_items = normalize_guidance_items(child_prior.get("action_change_process"))
+    if action_change_items:
+        lines.append(
+            "Observed atomic action-change process from the prior stage: "
+            f"{join_guidance_items(action_change_items)}."
+        )
     for value, label in (
         (
             child_prior.get("pre_completion_state"),
@@ -1096,6 +1103,12 @@ def render_skill_prior_as_natural_guidance(skill_prior: JsonObject) -> str:
         sentences.append(f"The current image should visibly support this with {join_guidance_items(evidence_items)}.")
 
     transition_items = normalize_guidance_items(skill_prior.get("state_transition_evidence"))
+    action_change_items = normalize_guidance_items(skill_prior.get("action_change_process"))
+    if action_change_items:
+        sentences.append(
+            "The prior-stage action-change process for this atomic skill is "
+            f"{join_guidance_items(action_change_items)}."
+        )
     if transition_items:
         sentences.append(
             "When temporal context is available, useful transition evidence includes "
