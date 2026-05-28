@@ -1,7 +1,8 @@
 import json
+import re
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from .checkpoint import checkpoint_status, error_to_json, save_checkpoint
 from .dataset import (
@@ -49,6 +50,40 @@ SKILL_PRIOR_KEYS = (
     "generation_prompt_guidance",
 )
 COMPLETED_STATUSES = {"completed", "completed_and_transitioning"}
+OUTPUT_STYLE_MAX_RETRIES = 2
+META_RULE_LANGUAGE_PATTERNS = (
+    r"\baccording to\b",
+    r"\bcriteria\b",
+    r"\bcriterion\b",
+    r"\bcompletion gate\b",
+    r"\bcompletion gates\b",
+    r"\btask rule\b",
+    r"\btask rules\b",
+    r"\bjudging rule\b",
+    r"\bjudging rules\b",
+    r"\brule requires\b",
+    r"\brules require\b",
+    r"\brequired by\b",
+    r"\brequirement\b",
+    r"\brequirements\b",
+    r"\bguidance\b",
+    r"\bguardrail\b",
+    r"\bguardrails\b",
+    r"\bprompt\b",
+    r"\binstruction\b",
+    r"\binstructions\b",
+    r"\bto satisfy\b",
+    r"\bsatisfy the\b",
+    r"\bcurrent_skill_status\b",
+    r"\bis_subtask_completed\b",
+    r"\bstatus should\b",
+    r"\blabel should\b",
+    r"\bshould be marked\b",
+    r"\bmust be marked\b",
+    r"\ballowed to mark\b",
+    r"\bskill remains in progress\b",
+    r"\bskill is in progress\b",
+)
 
 
 def run_generation_pipeline(
@@ -262,12 +297,39 @@ def run_episode_generation(
                 f"frame={sample.frame_number} image={sample.image_path}",
                 flush=True,
             )
-            response, metadata = gemini_client.generate_json(
-                system_instruction=system_instruction,
-                prompt=prompt,
-                image_paths=image_paths,
-                required_keys=MODEL_RESPONSE_KEYS,
-            )
+            model_response: JsonObject = {}
+            metadata: JsonObject = {}
+            output_style_retries = 0
+            generation_prompt = prompt
+            for output_style_attempt in range(OUTPUT_STYLE_MAX_RETRIES + 1):
+                response, metadata = gemini_client.generate_json(
+                    system_instruction=system_instruction,
+                    prompt=generation_prompt,
+                    image_paths=image_paths,
+                    required_keys=MODEL_RESPONSE_KEYS,
+                )
+                model_response = normalize_model_response(response)
+                meta_language_hits = find_meta_rule_language(model_response)
+                if not meta_language_hits:
+                    break
+                if output_style_attempt >= OUTPUT_STYLE_MAX_RETRIES:
+                    raise ValueError(
+                        "Model response contains meta-rule language in visible output fields: "
+                        + "; ".join(meta_language_hits)
+                    )
+                output_style_retries += 1
+                print(
+                    "[retry] meta_rule_language_in_model_response "
+                    f"attempt={output_style_attempt + 1}/{OUTPUT_STYLE_MAX_RETRIES} "
+                    f"matches={meta_language_hits[:3]}",
+                    flush=True,
+                )
+                generation_prompt = (
+                    f"{prompt}\n\nRewrite the previous JSON in plain visual-observation language. "
+                    "Explain only what is visible in the current image and what changed from the previous "
+                    "image when one is provided. Do not cite or name any external standard, checklist, "
+                    "hidden instruction, output field, or evaluation text."
+                )
             request_input: JsonObject = {
                 "image_path": str(sample.image_path),
                 "main_task": episode.task_name,
@@ -282,7 +344,6 @@ def run_episode_generation(
             }
             if has_previous_image and previous_image_path is not None:
                 request_input["previous_image_path"] = str(previous_image_path)
-            model_response = normalize_model_response(response)
             hard_completion_gate = apply_hard_completion_gates(
                 response=model_response,
                 skill=skill,
@@ -309,6 +370,9 @@ def run_episode_generation(
             }
             if hard_completion_gate:
                 record["hard_completion_gate"] = hard_completion_gate
+            if output_style_retries:
+                metadata = dict(metadata)
+                metadata["output_style_retries"] = output_style_retries
             if metadata:
                 record["google_response_metadata"] = metadata
             if rendered_prompt_path is not None:
@@ -422,6 +486,40 @@ def build_episode_generation_output(
     if error is not None:
         output["error"] = error
     return output
+
+
+def find_meta_rule_language(response: JsonObject) -> List[str]:
+    checked_fields = {
+        "reasoning": response.get("reasoning"),
+        "new_memory": response.get("new_memory"),
+        "subtask": response.get("subtask"),
+        "visible_transition": response.get("visible_transition"),
+    }
+    hits: List[str] = []
+    for field_name, field_value in checked_fields.items():
+        for text in iter_text_values(field_value):
+            lowered = text.lower()
+            for pattern in META_RULE_LANGUAGE_PATTERNS:
+                if re.search(pattern, lowered):
+                    hits.append(f"{field_name}:{pattern}")
+                    break
+    return hits
+
+
+def iter_text_values(value: Any) -> List[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        texts: List[str] = []
+        for nested in value.values():
+            texts.extend(iter_text_values(nested))
+        return texts
+    if isinstance(value, list):
+        texts = []
+        for item in value:
+            texts.extend(iter_text_values(item))
+        return texts
+    return []
 
 
 def normalize_model_response(response: JsonObject) -> JsonObject:
