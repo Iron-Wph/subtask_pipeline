@@ -84,6 +84,36 @@ META_RULE_LANGUAGE_PATTERNS = (
     r"\bskill remains in progress\b",
     r"\bskill is in progress\b",
 )
+SIDE_MECHANISM_PATTERNS = (
+    r"\bpress(?:es|ed|ing)?\b",
+    r"\bpush(?:es|ed|ing)?\s+(?:the\s+)?(?:[^.;,\n]*\s+)?(?:button|switch|control|release)\b",
+    r"\btoggle(?:s|d|ing)?\b",
+    r"\bactivate(?:s|d|ing)?\b",
+    r"\bdeactivate(?:s|d|ing)?\b",
+    r"\bturn(?:s|ed|ing)?\s+(?:on|off)\b",
+    r"\b(?:release|power|start|stop)\s+(?:button|switch|control)\b",
+    r"\bindicator\s+light\b",
+    r"\b(?:button|switch|control panel|control|knob|indicator)\b",
+    r"\bunlatch(?:es|ed|ing)?\b",
+    r"\blatch(?:es|ed|ing)?\b",
+)
+SIDE_MECHANISM_ALLOW_PATTERNS = (
+    "press",
+    "push button",
+    "button",
+    "switch",
+    "toggle",
+    "turn on",
+    "turn off",
+    "activate",
+    "deactivate",
+    "control",
+    "knob",
+    "indicator",
+    "light",
+    "latch",
+    "unlatch",
+)
 
 
 def run_generation_pipeline(
@@ -310,25 +340,31 @@ def run_episode_generation(
                 )
                 model_response = normalize_model_response(response)
                 meta_language_hits = find_meta_rule_language(model_response)
-                if not meta_language_hits:
+                atomic_scope_hits = find_atomic_scope_violations(model_response, skill)
+                output_style_hits = [*meta_language_hits, *atomic_scope_hits]
+                if not output_style_hits:
                     break
                 if output_style_attempt >= OUTPUT_STYLE_MAX_RETRIES:
                     raise ValueError(
-                        "Model response contains meta-rule language in visible output fields: "
-                        + "; ".join(meta_language_hits)
+                        "Model response contains forbidden output language in visible fields: "
+                        + "; ".join(output_style_hits)
                     )
                 output_style_retries += 1
                 print(
-                    "[retry] meta_rule_language_in_model_response "
+                    "[retry] forbidden_language_in_model_response "
                     f"attempt={output_style_attempt + 1}/{OUTPUT_STYLE_MAX_RETRIES} "
-                    f"matches={meta_language_hits[:3]}",
+                    f"matches={output_style_hits[:3]}",
                     flush=True,
                 )
                 generation_prompt = (
                     f"{prompt}\n\nRewrite the previous JSON in plain visual-observation language. "
                     "Explain only what is visible in the current image and what changed from the previous "
                     "image when one is provided. Do not cite or name any external standard, checklist, "
-                    "hidden instruction, output field, or evaluation text."
+                    "hidden instruction, output field, or evaluation text. Keep reasoning, new_memory, "
+                    "subtask, and visible_transition within the candidate atomic skill only. Do not describe "
+                    "a side mechanism action such as pressing, pushing, toggling, activating, unlatching, "
+                    "or using a button/switch/control unless that action or object is explicitly named in "
+                    "the Skill, Objects, or Manipulating object fields."
                 )
             request_input: JsonObject = {
                 "image_path": str(sample.image_path),
@@ -502,6 +538,36 @@ def find_meta_rule_language(response: JsonObject) -> List[str]:
             for pattern in META_RULE_LANGUAGE_PATTERNS:
                 if re.search(pattern, lowered):
                     hits.append(f"{field_name}:{pattern}")
+                    break
+    return hits
+
+
+def find_atomic_scope_violations(response: JsonObject, skill: SkillSpec) -> List[str]:
+    allowed_context = " ".join(
+        normalize_action_text(value)
+        for value in (
+            skill.skill_description,
+            skill.skill.get("skill_description"),
+            skill.object_id,
+            skill.manuipation_object_id,
+        )
+    )
+    if any(pattern in allowed_context for pattern in SIDE_MECHANISM_ALLOW_PATTERNS):
+        return []
+
+    checked_fields = {
+        "reasoning": response.get("reasoning"),
+        "new_memory": response.get("new_memory"),
+        "subtask": response.get("subtask"),
+        "visible_transition": response.get("visible_transition"),
+    }
+    hits: List[str] = []
+    for field_name, field_value in checked_fields.items():
+        for text in iter_text_values(field_value):
+            lowered = text.lower()
+            for pattern in SIDE_MECHANISM_PATTERNS:
+                if re.search(pattern, lowered):
+                    hits.append(f"{field_name}:atomic_scope:{pattern}")
                     break
     return hits
 
