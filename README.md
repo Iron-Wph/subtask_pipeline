@@ -102,7 +102,7 @@ outputs/episode_0001/prior/
   autolabel_prompt_info.json
 ```
 
-`autolabel_prompt_info.json` 是 `generate_dataset.py` 的首选输入。`task_prior.json` 是同一份 prior 信息的主文件；正常情况下两者内容一致。父 agent 审查阶段会按 `--parent-prior-attempts` 做多轮完整请求，默认 3 轮；每一轮完整请求内部仍然会按 `--max-response-retries` 处理无效 JSON 修复。如果父 agent 多轮后仍返回无效 JSON 或 API 报错，但所有子 agent prior 已经完成，程序会自动写出 child-only fallback 的 `task_prior.json` 和 `autolabel_prompt_info.json`，其中 `status` 为 `parent_failed_child_fallback`，`usable_for_generation` 为 `true`。这种 fallback 仍可用于 generation，因为逐帧 generation 默认只读取 child prior 的 `generation_prompt_guidance` 和结构化 guardrails，父 agent 审查字段不作为 generation 规则注入。
+`autolabel_prompt_info.json` 是 `generate_dataset.py` 的首选输入。`task_prior.json` 是同一份 prior 信息的主文件；正常情况下两者内容一致。prior 阶段会先生成每个 child prior，再基于轻量全局 skill 顺序上下文对每个 skill 单独 review。review 成功后会产出 `revised_child_prior`，并把修正后的字段合并回 `subtask_priors`，所以后续 generation 会直接使用修正版 child prior。`--parent-prior-attempts` 表示每个 skill review 的最大重试轮数；如果某个 skill review 失败，只回退该 skill 到原始 child prior，不影响其它 skill。
 
 Prompt information structure for each skill:
 
@@ -145,9 +145,9 @@ Prompt information structure for each skill:
 }
 ```
 
-These structured fields store the child agent's visual criteria. `generation_prompt_guidance` is the child agent's main natural-language Rule 16 guidance after sampled-frame consolidation; it is not a raw key/value dump. The parent agent acts as a reviewer and QA annotator only; parent review fields are saved for inspection and are not injected into frame-level generation prompts. To avoid information loss when inspecting `model_response.skills`, each parent review skill also includes a `child_prior_snapshot` copied from the child prior with the key completion, negative, no_for_sure, false-positive, and guidance fields. Generic memory format, output JSON format, actor naming, and status rules still come from the shared `generate_dataset.py` prompt.
+These structured fields store the child agent's visual criteria. `generation_prompt_guidance` is the child agent's main natural-language Rule 16 guidance after sampled-frame consolidation; it is not a raw key/value dump. The review stage now runs per skill. Each reviewer receives a lightweight global skill-order context plus one compact child prior, then writes a `revised_child_prior`. The revised fields are merged back into `subtask_priors`, and frame-level generation uses those revised child-prior fields directly. Generic memory format, output JSON format, actor naming, and status rules still come from the shared `generate_dataset.py` prompt.
 
-Prior generation uses three levels of constraints: `universal_visual_rubric` defines direct visible evidence and target consistency; `action_primitive_rubric` defines generic robot action primitives such as move, pick, place, press, and open/close; `prior_review_rubric` asks the parent agent to audit weak child-agent criteria and false-positive risks for offline review. Large-scale generation does not load these generic rubrics directly; it loads only the child `generation_prompt_guidance` and child structured guardrails for the current skill.
+Prior generation uses three levels of constraints: `universal_visual_rubric` defines direct visible evidence and target consistency; `action_primitive_rubric` defines generic robot action primitives such as move, pick, place, press, and open/close; `prior_review_rubric` asks the per-skill reviewer to rewrite weak child-agent criteria and false-positive risks into `revised_child_prior`. Large-scale generation does not load these generic rubrics directly; it loads the revised child `generation_prompt_guidance` and structured guardrails for the current skill.
 
 ## 子任务描述应该包含什么
 
@@ -244,11 +244,7 @@ generation_prompt_guidance      Main natural-language Rule 16 guidance generated
 }
 ```
 
-Generation does not paste the full `autolabel_prompt_info.json` into Gemini, and it does not paste raw structured key/value JSON into the prompt. The flow is now: the child agent generates the main `generation_prompt_guidance`; the parent agent returns QA review fields that are saved in JSON but not used as generation-time rules.
-
-Parent review output should not be used directly as Rule 16 guidance. It is intentionally an audit record. The detailed generation criteria remain in `subtask_priors` and are mirrored under each parent review item's `child_prior_snapshot`.
-
-Generation reads the child `generation_prompt_guidance`, then appends `pre_completion_state`, `in_progress_state`, `completion_gates`, and `not_sufficient_for_completion` as child structured guardrails. If an old prior file lacks child `generation_prompt_guidance`, the code falls back to rendering natural guidance from the child structured fields.
+Generation reads the revised child `generation_prompt_guidance`, then appends `pre_completion_state`, `in_progress_state`, `completion_gates`, and `not_sufficient_for_completion` as structured guardrails. If an old prior file lacks `generation_prompt_guidance`, the code falls back to rendering natural guidance from the structured fields.
 
 When `--save-rendered-prompts` is enabled, the saved prompt shows these rendered section titles. They are generated by `generation.py`; they are not literal JSON keys in `autolabel_prompt_info.json`.
 
@@ -496,9 +492,9 @@ sampled_frame_analysis   已完成帧的物体/机械臂/场景观测摘要
 frame_observation_schemas 已完成帧的结构化观测列表，用于 child-summary agent 全局生成完成条件
 ```
 
-如果中断发生在子任务汇总请求中，同一个 `subtask_XX_prior.json` 会保留 frame-level preliminary prior 和错误信息。如果中断发生在父 agent 审查阶段，`task_prior.json` 会保存已完成的全部子任务结果和父阶段错误信息。
+如果中断发生在子任务汇总请求中，同一个 `subtask_XX_prior.json` 会保留 frame-level preliminary prior 和错误信息。如果中断发生在 per-skill review 阶段，`task_prior.json` 会尽量保存已完成 review 的子任务结果、未 review 的 child prior 和当前错误信息。
 
-如果不是键盘中断，而是父 agent 自身返回无效 JSON、请求超时或 API 报错，程序会先按 `--parent-prior-attempts` 重试父 agent 完整请求。默认 3 轮父 agent 请求，每轮内部仍会使用 `--max-response-retries`。如果多轮后仍失败，程序不会丢弃已完成的子 agent 结果；它会保存一个可用于 generation 的 child-only fallback：
+如果不是键盘中断，而是某个 per-skill review 返回无效 JSON、请求超时或 API 报错，程序会先按 `--parent-prior-attempts` 重试该 skill 的 review 请求。默认 3 轮，每轮内部仍会使用 `--max-response-retries`。如果该 skill 多轮后仍失败，程序不会丢弃已完成的子 agent 结果；只会让该 skill 回退到原始 child prior，其它 skill 的 review 结果仍会保存：
 
 ```text
 outputs/episode_0001/prior/task_prior.json
@@ -508,12 +504,12 @@ outputs/episode_0001/prior/autolabel_prompt_info.json
 该文件会包含：
 
 ```text
-status                  parent_failed_child_fallback
+status                  complete 或 partial_skill_review_fallback
 usable_for_generation   true
-parent_prior_attempts   父 agent 最大完整请求轮数
-parent_attempt_count    实际父 agent 请求轮数
-parent_errors           每轮失败的异常类型、错误消息和 traceback
-subtask_priors          已完成的 child prior 结果
+parent_prior_attempts   每个 skill review 的最大请求轮数
+reviewed_subtask_count  已完成 review / fallback 的 skill 数
+parent_errors           失败 skill 的异常类型、错误消息和 traceback
+subtask_priors          已合并 revised_child_prior 的 child prior 结果
 ```
 
 这种情况下后续仍然优先把 `autolabel_prompt_info.json` 传给 `generate_dataset.py`。`prior_checkpoint.json` 只用于定位中断进度和错误来源，不作为常规 generation 输入。
@@ -581,8 +577,8 @@ prompts/default_prompts.json
 ```text
 subtask_prior_system
 subtask_prior_user
-parent_prior_system
-parent_prior_user
+skill_prior_review_system
+skill_prior_review_user
 generation_system
 generation_user
 ```
@@ -598,7 +594,7 @@ generation_user
 --max-response-retries      无效 JSON 响应重试次数
 --sample-k                  prior 阶段每个 skill 的均匀采样帧数
 --prior-min-items           prior 阶段每个 skill 列表字段的最少条数，默认 4
---parent-prior-attempts     父 agent 完整请求重试轮数，默认 3；全部失败后写 child-only fallback
+--parent-prior-attempts     每个 skill review 的重试轮数，默认 3；单个 skill 失败后回退到原始 child prior
 --request-delay             每次请求后的等待秒数
 --include-previous-image    generation 时同时传入上一个采样帧
 --episode-offset            批量模式跳过前 N 个 episode

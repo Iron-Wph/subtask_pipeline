@@ -808,6 +808,11 @@ def build_global_prompt_info(task_prior: JsonObject) -> JsonObject:
 
 
 def compact_skill_prior(skill_prior: JsonObject) -> JsonObject:
+    revised = skill_prior.get("revised_child_prior")
+    if isinstance(revised, dict):
+        base = dict(skill_prior)
+        base.update(revised)
+        skill_prior = base
     compact: JsonObject = {}
     for key in SKILL_PRIOR_KEYS:
         value = skill_prior.get(key)

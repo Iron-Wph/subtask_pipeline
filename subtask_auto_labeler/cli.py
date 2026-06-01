@@ -51,7 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_PARENT_PRIOR_ATTEMPTS,
         help=(
-            "Full parent-agent request attempts before child-only fallback. Each attempt still uses "
+            "Per-skill review attempts before child-prior fallback. Each attempt still uses "
             "--max-response-retries for invalid JSON repair."
         ),
     )
@@ -110,7 +110,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_PARENT_PRIOR_ATTEMPTS,
         help=(
-            "Full parent-agent request attempts before child-only fallback. Each attempt still uses "
+            "Per-skill review attempts before child-prior fallback. Each attempt still uses "
             "--max-response-retries for invalid JSON repair."
         ),
     )
