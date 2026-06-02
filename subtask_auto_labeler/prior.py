@@ -37,13 +37,24 @@ SUBTASK_SUMMARY_KEYS = {
     "ambiguous_cases",
     "generation_prompt_guidance",
 }
+SKILL_REVIEW_PATCH_FIELDS = (
+    "pre_completion_state",
+    "in_progress_state",
+    "required_visual_evidence",
+    "state_transition_evidence",
+    "completion_gates",
+    "not_sufficient_for_completion",
+    "ambiguous_cases",
+    "common_false_positives",
+)
+SKILL_REVIEW_OUTPUT_FIELDS = SKILL_REVIEW_PATCH_FIELDS + ("generation_prompt_guidance",)
 SKILL_REVIEW_KEYS = {
     "stage_idx",
     "skill_idx",
     "review_status",
     "review_notes",
     "cross_skill_risks",
-    "revised_child_prior",
+    "revised_fields",
 }
 DEFAULT_PRIOR_MIN_ITEMS = 4
 DEFAULT_PARENT_PRIOR_ATTEMPTS = 3
@@ -789,14 +800,11 @@ def compact_child_prior_for_review(child_prior: JsonObject) -> JsonObject:
         "target_binding",
         "subtask_name",
         "target_visual_description",
-        "action_change_process",
         "pre_completion_state",
         "in_progress_state",
         "completion_gates",
-        "completion_conditions",
         "required_visual_evidence",
         "state_transition_evidence",
-        "negative_conditions",
         "not_sufficient_for_completion",
         "common_false_positives",
         "ambiguous_cases",
@@ -808,7 +816,6 @@ def compact_child_prior_for_review(child_prior: JsonObject) -> JsonObject:
 
 
 def build_skill_review_fallback(child_prior: JsonObject, error: JsonObject) -> JsonObject:
-    compact_child = compact_child_prior_for_review(child_prior)
     return {
         "stage_idx": child_prior.get("stage_idx"),
         "skill_idx": child_prior.get("skill_idx"),
@@ -816,24 +823,26 @@ def build_skill_review_fallback(child_prior: JsonObject, error: JsonObject) -> J
         "review_notes": ["Skill review failed; using the child prior unchanged for generation."],
         "cross_skill_risks": [],
         "review_error": error,
-        "revised_child_prior": compact_child,
+        "revised_fields": {},
     }
 
 
 def normalize_skill_review_response(response: JsonObject, child_prior: JsonObject) -> JsonObject:
     cleaned = sanitize_visual_guidance(response)
-    revised = cleaned.get("revised_child_prior")
+    revised = cleaned.get("revised_fields")
     if not isinstance(revised, dict):
-        revised = compact_child_prior_for_review(child_prior)
+        revised = cleaned.get("revised_child_prior")
+    if not isinstance(revised, dict):
+        revised = {}
     normalized: JsonObject = {
         "stage_idx": child_prior.get("stage_idx"),
         "skill_idx": child_prior.get("skill_idx"),
         "skill_description": child_prior.get("skill_description"),
-        "subtask_name": revised.get("subtask_name") or child_prior.get("subtask_name"),
-        "review_status": cleaned.get("review_status", "revised"),
+        "subtask_name": child_prior.get("subtask_name"),
+        "review_status": cleaned.get("review_status", "patched"),
         "review_notes": cleaned.get("review_notes", []),
         "cross_skill_risks": cleaned.get("cross_skill_risks", []),
-        "revised_child_prior": normalize_revised_child_prior(revised, child_prior),
+        "revised_fields": normalize_revised_fields(revised),
     }
     for key in ("review_error", "review_attempt_count", "google_response_metadata"):
         if has_prompt_value(cleaned.get(key)):
@@ -841,27 +850,21 @@ def normalize_skill_review_response(response: JsonObject, child_prior: JsonObjec
     return sanitize_visual_guidance(normalized)
 
 
-def normalize_revised_child_prior(revised: JsonObject, child_prior: JsonObject) -> JsonObject:
-    normalized = compact_child_prior_for_review(child_prior)
-    for key in SUBTASK_SUMMARY_KEYS:
+def normalize_revised_fields(revised: JsonObject) -> JsonObject:
+    normalized: JsonObject = {}
+    for key in SKILL_REVIEW_OUTPUT_FIELDS:
         value = revised.get(key)
         if has_prompt_value(value):
             normalized[key] = value
-    normalized["stage_idx"] = child_prior.get("stage_idx")
-    normalized["skill_idx"] = child_prior.get("skill_idx")
-    normalized["skill_description"] = child_prior.get("skill_description")
-    normalized["object_id"] = child_prior.get("object_id")
-    normalized["manuipation_object_id"] = child_prior.get("manuipation_object_id")
-    normalized["frame_duration"] = child_prior.get("frame_duration")
     return sanitize_visual_guidance(normalized)
 
 
 def apply_skill_review_to_child_prior(child_prior: JsonObject, review: JsonObject) -> JsonObject:
-    revised = review.get("revised_child_prior")
+    revised = review.get("revised_fields")
     if not isinstance(revised, dict):
-        revised = compact_child_prior_for_review(child_prior)
+        revised = {}
     reviewed = dict(child_prior)
-    for key in SUBTASK_SUMMARY_KEYS:
+    for key in SKILL_REVIEW_OUTPUT_FIELDS:
         value = revised.get(key)
         if has_prompt_value(value):
             reviewed[key] = value
