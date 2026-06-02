@@ -49,6 +49,16 @@ SKILL_PRIOR_KEYS = (
     "generation_prompt_guidance",
 )
 COMPLETED_STATUSES = {"completed", "completed_and_transitioning"}
+TEMPORAL_CORRECTION_PROMPT = (
+    "Temporal consistency correction:\n"
+    "Later requests in this same skill segment identify a final accepted completed interval, and a later "
+    "non-completed response separates this frame from that final completed interval. For this repeated "
+    "request, you must not label the current candidate skill as completed. Set is_subtask_completed to "
+    "false. Set current_skill_status to in_progress, not_started, or no_for_sure based on the visible "
+    "evidence, but never completed or completed_and_transitioning. Keep visible_transition empty unless "
+    "a non-completed transition is directly visible. Rewrite reasoning and new_memory so they are "
+    "consistent with a non-completed label. Return only valid JSON."
+)
 
 
 def run_generation_pipeline(
@@ -269,6 +279,8 @@ def run_episode_generation(
                 required_keys=MODEL_RESPONSE_KEYS,
             )
             request_input: JsonObject = {
+                "request_index": request_index,
+                "total_requests": len(sampled),
                 "image_path": str(sample.image_path),
                 "main_task": episode.task_name,
                 "old_memory": old_memory,
@@ -291,6 +303,7 @@ def run_episode_generation(
                 last_request_index=last_request_index_by_stage.get(skill.stage_idx),
             )
             record: JsonObject = {
+                "request_index": request_index,
                 "skill_idx": skill.skill_idx,
                 "stage_idx": skill.stage_idx,
                 "image_dir": sample.image_path.parent.name,
@@ -322,6 +335,13 @@ def run_episode_generation(
             previous_image_path = sample.image_path
             if request_delay > 0 and request_index < len(sampled):
                 time.sleep(request_delay)
+        temporal_validation = apply_temporal_completion_validation(
+            records=records,
+            prompt_catalog=prompt_catalog,
+            gemini_client=gemini_client,
+            system_instruction=system_instruction,
+            request_delay=request_delay,
+        )
     except BaseException as exc:
         output = build_episode_generation_output(
             annotation_json=annotation_json,
@@ -349,6 +369,7 @@ def run_episode_generation(
         records=records,
         expected_count=len(sampled),
         status="complete",
+        temporal_validation=temporal_validation,
     )
     write_json(output_path, output)
     print(f"[saved] {output_path}", flush=True)
@@ -398,6 +419,7 @@ def build_episode_generation_output(
     records: List[JsonObject],
     expected_count: int,
     status: str,
+    temporal_validation: Optional[JsonObject] = None,
     error: Optional[JsonObject] = None,
     current_request: Optional[JsonObject] = None,
 ) -> JsonObject:
@@ -414,14 +436,229 @@ def build_episode_generation_output(
         "sample_source": "valid_duration_stride",
         "expected_count": expected_count,
         "processed_count": len(records),
-        "used_count": len(records),
+        "used_count": sum(1 for record in records if record.get("result_used", True) is True),
         "results": records,
     }
+    if temporal_validation is not None:
+        output["temporal_validation"] = temporal_validation
     if current_request is not None:
         output["current_request"] = current_request
     if error is not None:
         output["error"] = error
     return output
+
+
+def apply_temporal_completion_validation(
+    *,
+    records: List[JsonObject],
+    prompt_catalog: PromptCatalog,
+    gemini_client: GeminiClient,
+    system_instruction: str,
+    request_delay: float,
+) -> JsonObject:
+    mark_label_usage(records)
+    retry_records = find_temporal_retry_records(records)
+    summary: JsonObject = {
+        "strategy": "retry_completed_before_later_non_completed_barrier",
+        "checked": True,
+        "stage_count": len({record.get("stage_idx") for record in records}),
+        "retry_count": len(retry_records),
+        "retried_request_indices": [record.get("request_input", {}).get("request_index") for record in retry_records],
+        "note": (
+            "For each skill segment, scan backward to find the last completed block. Completed responses "
+            "before the first earlier non-completed barrier are repeated with a correction prompt that "
+            "requires a non-completed label."
+        ),
+    }
+    if not retry_records:
+        return summary
+
+    completed_retry_count = 0
+    for retry_index, record in enumerate(retry_records, start=1):
+        request_input = record.get("request_input")
+        if not isinstance(request_input, dict):
+            continue
+        completed_retry_count += 1
+        original_model_response = dict(record.get("model_response", {}))
+        original_metadata = record.pop("google_response_metadata", None)
+        correction_prompt = build_temporal_correction_prompt(prompt_catalog, request_input)
+        image_paths = build_retry_image_paths(request_input)
+        print(
+            "[temporal-retry] "
+            f"request_index={request_input.get('request_index')} "
+            f"stage_idx={record.get('stage_idx')} frame={record.get('frame_number')}",
+            flush=True,
+        )
+        response, metadata = gemini_client.generate_json(
+            system_instruction=system_instruction,
+            prompt=correction_prompt,
+            image_paths=image_paths,
+            required_keys=MODEL_RESPONSE_KEYS,
+        )
+        corrected_response = normalize_model_response(response)
+        correction_gate = force_temporal_retry_non_completed(corrected_response)
+        record["model_response"] = corrected_response
+        record["context_source_used"] = True
+        record["result_used"] = is_label_usable(corrected_response)
+        record["temporal_retry"] = {
+            "repeated": True,
+            "retry_index": retry_index,
+            "reason": (
+                "This request originally returned completed before a later non-completed barrier in "
+                "the same skill segment."
+            ),
+            "correction_instruction": TEMPORAL_CORRECTION_PROMPT,
+            "original_model_response": original_model_response,
+        }
+        if original_metadata is not None:
+            record["temporal_retry"]["original_google_response_metadata"] = original_metadata
+        if correction_gate:
+            record["temporal_retry"]["correction_gate"] = correction_gate
+        if metadata:
+            record["google_response_metadata"] = metadata
+        if not record["result_used"]:
+            record["result_filter"] = build_result_filter(corrected_response)
+        elif "result_filter" in record:
+            record.pop("result_filter", None)
+        if request_delay > 0 and retry_index < len(retry_records):
+            time.sleep(request_delay)
+    summary["completed_retry_count"] = completed_retry_count
+    return summary
+
+
+def mark_label_usage(records: List[JsonObject]) -> None:
+    for record in records:
+        record["context_source_used"] = True
+        response = record.get("model_response")
+        if not isinstance(response, dict):
+            record["result_used"] = False
+            record["result_filter"] = {"reason": "missing_model_response"}
+            continue
+        record["result_used"] = is_label_usable(response)
+        if not record["result_used"]:
+            record["result_filter"] = build_result_filter(response)
+        else:
+            record.pop("result_filter", None)
+
+
+def find_temporal_retry_records(records: List[JsonObject]) -> List[JsonObject]:
+    by_stage: Dict[int, List[JsonObject]] = {}
+    for record in records:
+        stage_idx = record.get("stage_idx")
+        if isinstance(stage_idx, int):
+            by_stage.setdefault(stage_idx, []).append(record)
+
+    retry_records: List[JsonObject] = []
+    for stage_records in by_stage.values():
+        completed_run = find_last_completed_run(stage_records)
+        if completed_run is None:
+            continue
+        run_start, _ = completed_run
+        for record in stage_records[:run_start]:
+            if is_completed_record(record):
+                record["temporal_retry_candidate"] = {
+                    "reason": (
+                        "completed response appears before the final accepted completed block and before "
+                        "a later non-completed barrier in the same skill segment"
+                    ),
+                }
+                retry_records.append(record)
+    return retry_records
+
+
+def find_last_completed_run(stage_records: List[JsonObject]) -> Optional[tuple[int, int]]:
+    end_index: Optional[int] = None
+    for index in range(len(stage_records) - 1, -1, -1):
+        if is_completed_record(stage_records[index]):
+            end_index = index
+            break
+    if end_index is None:
+        return None
+
+    start_index = end_index
+    while start_index > 0 and is_completed_record(stage_records[start_index - 1]):
+        start_index -= 1
+    return start_index, end_index
+
+
+def build_temporal_correction_prompt(prompt_catalog: PromptCatalog, request_input: JsonObject) -> str:
+    has_previous_image = bool(request_input.get("previous_image_path"))
+    prompt_values = {
+        "task_name": request_input.get("main_task", ""),
+        "old_memory": request_input.get("old_memory", ""),
+        "skill_description": request_input.get("skill_description", ""),
+        "object_id": request_input.get("object_id", ""),
+        "manuipation_object_id": request_input.get("manuipation_object_id", ""),
+        "frame_duration": request_input.get("frame_duration", []),
+        "frame_number": request_input.get("frame_number", ""),
+        "image_block": build_image_block(has_previous_image),
+        "completion_gate_context": request_input.get("completion_gate_context", ""),
+        "completion_guidance": request_input.get("completion_guidance", ""),
+    }
+    prompt = prompt_catalog.render("generation_user", prompt_values)
+    return f"{prompt}\n\n{TEMPORAL_CORRECTION_PROMPT}"
+
+
+def build_retry_image_paths(request_input: JsonObject) -> List[Path]:
+    image_paths: List[Path] = []
+    previous_image_path = request_input.get("previous_image_path")
+    if previous_image_path:
+        image_paths.append(Path(str(previous_image_path)))
+    image_path = request_input.get("image_path")
+    if image_path:
+        image_paths.append(Path(str(image_path)))
+    return image_paths
+
+
+def force_temporal_retry_non_completed(response: JsonObject) -> Optional[JsonObject]:
+    original_status = response.get("current_skill_status")
+    original_is_completed = response.get("is_subtask_completed")
+    if not is_completed_response(response):
+        return None
+    response["current_skill_status"] = "in_progress"
+    response["is_subtask_completed"] = False
+    response["visible_transition"] = ""
+    return {
+        "rule": "temporal_retry_must_not_complete",
+        "reason": "The correction retry still returned completed, so the non-completed temporal constraint was enforced.",
+        "original_current_skill_status": original_status,
+        "original_is_subtask_completed": original_is_completed,
+        "forced_current_skill_status": "in_progress",
+        "forced_is_subtask_completed": False,
+    }
+
+
+def is_completed_record(record: JsonObject) -> bool:
+    response = record.get("model_response")
+    return isinstance(response, dict) and is_completed_response(response)
+
+
+def is_completed_response(response: JsonObject) -> bool:
+    status = response.get("current_skill_status")
+    if isinstance(status, str) and status.strip().lower().replace(" ", "_").replace("-", "_") in COMPLETED_STATUSES:
+        return True
+    return response.get("is_subtask_completed") is True
+
+
+def is_label_usable(response: JsonObject) -> bool:
+    status = response.get("current_skill_status")
+    if isinstance(status, str) and status.strip().lower().replace(" ", "_").replace("-", "_") == "no_for_sure":
+        return False
+    return True
+
+
+def build_result_filter(response: JsonObject) -> JsonObject:
+    status = response.get("current_skill_status")
+    if isinstance(status, str) and status.strip().lower().replace(" ", "_").replace("-", "_") == "no_for_sure":
+        return {
+            "reason": "no_for_sure",
+            "label_used": False,
+            "description": "The model marked the frame as visually uncertain, so this label is not used as supervision.",
+        }
+    return {
+        "reason": "unusable_model_response",
+        "label_used": False,
+    }
 
 
 def normalize_model_response(response: JsonObject) -> JsonObject:
