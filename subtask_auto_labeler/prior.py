@@ -36,10 +36,6 @@ SUBTASK_SUMMARY_KEYS = {
     "ambiguous_cases",
     "generation_prompt_guidance",
 }
-PARENT_PRIOR_KEYS = {
-    "task_summary",
-    "skills",
-}
 DEFAULT_PRIOR_MIN_ITEMS = 4
 DEFAULT_PARENT_PRIOR_ATTEMPTS = 3
 PARENT_REVIEW_KEYS = (
@@ -67,6 +63,12 @@ PARENT_REVIEW_LIST_FIELDS = {
     "additional_not_sufficient_for_completion",
     "additional_ambiguous_cases",
     "cross_skill_risks",
+}
+PARENT_REVIEW_CHILD_IDENTITY_FIELDS = {
+    "stage_idx",
+    "skill_idx",
+    "skill_description",
+    "subtask_name",
 }
 CHILD_PRIOR_SNAPSHOT_KEYS = (
     "skill_type_hypothesis",
@@ -622,13 +624,129 @@ def run_parent_prior(
     prior_min_items: int,
     parent_prior_attempts: int = DEFAULT_PARENT_PRIOR_ATTEMPTS,
 ) -> JsonObject:
+    if parent_prior_attempts < 1:
+        raise ValueError("parent_prior_attempts must be at least 1.")
+
     system_instruction = prompt_catalog.get("parent_prior_system")
+    global_review_context = build_parent_review_global_context(episode, subtask_results)
+    parent_reviews: List[JsonObject] = []
+    parent_errors: List[JsonObject] = []
+    metadata_by_skill: List[JsonObject] = []
+    parent_attempt_count = 0
+    current_request: Optional[JsonObject] = None
+
+    for child_prior in subtask_results:
+        stage_idx = child_prior.get("stage_idx")
+        skill_idx = child_prior.get("skill_idx")
+        current_request = {
+            "phase": "parent_skill_prior_review",
+            "stage_idx": stage_idx,
+            "skill_idx": skill_idx,
+            "parent_prior_attempts": parent_prior_attempts,
+            "reviewed_subtask_count": len(parent_reviews),
+            "subtask_prior_count": len(subtask_results),
+        }
+        try:
+            review, metadata, review_errors, attempt_count = run_single_parent_skill_review(
+                episode=episode,
+                child_prior=child_prior,
+                global_review_context=global_review_context,
+                system_instruction=system_instruction,
+                prompt_catalog=prompt_catalog,
+                gemini_client=gemini_client,
+                prior_min_items=prior_min_items,
+                parent_prior_attempts=parent_prior_attempts,
+            )
+            parent_reviews.append(review)
+            parent_attempt_count += attempt_count
+            if review.get("review_status") == "review_failed_child_fallback":
+                parent_errors.extend(review_errors)
+            if metadata:
+                metadata_by_skill.append(
+                    {
+                        "stage_idx": stage_idx,
+                        "skill_idx": skill_idx,
+                        "metadata": metadata,
+                    }
+                )
+        except KeyboardInterrupt as exc:
+            parent_checkpoint: JsonObject = {
+                "status": checkpoint_status(exc),
+                "agent_type": "per_skill_parent_review_agent",
+                "task_name": episode.task_name,
+                "annotation_json": str(episode.annotation_json),
+                "image_root": str(episode.image_root),
+                "prior_min_items": prior_min_items,
+                "parent_prior_attempts": parent_prior_attempts,
+                "current_request": current_request,
+                "error": error_to_json(exc),
+                "reviewed_subtask_count": len(parent_reviews),
+                "parent_review_results": parent_reviews,
+                "parent_errors": parent_errors,
+                "subtask_prior_count": len(subtask_results),
+                "subtask_priors": subtask_results,
+            }
+            save_checkpoint(output_path, parent_checkpoint)
+            raise
+
+    status = "complete" if not parent_errors else "partial_skill_review_fallback"
+    response: JsonObject = {
+        "task_summary": episode.task_name,
+        "global_review_context": global_review_context,
+        "skills": parent_reviews,
+    }
+    parent_prior: JsonObject = {
+        "status": status,
+        "usable_for_generation": True,
+        "agent_type": "per_skill_parent_review_agent",
+        "task_name": episode.task_name,
+        "annotation_json": str(episode.annotation_json),
+        "image_root": str(episode.image_root),
+        "prior_min_items": prior_min_items,
+        "parent_prior_attempts": parent_prior_attempts,
+        "parent_attempt_count": parent_attempt_count,
+        "reviewed_subtask_count": len(parent_reviews),
+        "model_response": response,
+        "subtask_prior_count": len(subtask_results),
+        "subtask_priors": subtask_results,
+    }
+    if parent_errors:
+        parent_prior["parent_errors"] = parent_errors
+        parent_prior["parent_error"] = parent_errors[-1]
+    if metadata_by_skill:
+        parent_prior["google_response_metadata"] = {
+            "skill_reviews": metadata_by_skill,
+        }
+    parent_prior = sanitize_visual_guidance(parent_prior)
+    write_json(output_path, parent_prior)
+    print(f"[saved] {output_path}", flush=True)
+    return parent_prior
+
+
+def run_single_parent_skill_review(
+    *,
+    episode: EpisodeData,
+    child_prior: JsonObject,
+    global_review_context: JsonObject,
+    system_instruction: str,
+    prompt_catalog: PromptCatalog,
+    gemini_client: GeminiClient,
+    prior_min_items: int,
+    parent_prior_attempts: int,
+) -> Tuple[JsonObject, JsonObject, List[JsonObject], int]:
+    stage_idx = child_prior.get("stage_idx")
+    skill_idx = child_prior.get("skill_idx")
     prompt_values = {
         "task_name": episode.task_name,
         "annotation_json": str(episode.annotation_json),
         "image_root": str(episode.image_root),
         "prior_min_items": prior_min_items,
-        "subtask_priors_json": json.dumps(subtask_results, ensure_ascii=False, indent=2),
+        "global_review_context_json": json.dumps(global_review_context, ensure_ascii=False, indent=2),
+        "child_prior_json": json.dumps(
+            compact_child_prior_for_parent_review(child_prior),
+            ensure_ascii=False,
+            indent=2,
+        ),
         "universal_visual_rubric": prompt_catalog.render_optional("universal_visual_rubric", {}),
         "action_primitive_rubric": prompt_catalog.render_optional("action_primitive_rubric", {}),
         "prior_review_rubric": prompt_catalog.render_optional("prior_review_rubric", {}),
@@ -637,16 +755,12 @@ def run_parent_prior(
         prompt_catalog.render("parent_prior_user", prompt_values),
         prompt_catalog.render_optional("target_consistency_rules", prompt_values),
     )
-    if parent_prior_attempts < 1:
-        raise ValueError("parent_prior_attempts must be at least 1.")
-    response: JsonObject = {}
-    metadata: JsonObject = {}
-    parent_errors: List[JsonObject] = []
-    parent_attempt_count = 0
+
+    review_errors: List[JsonObject] = []
     for parent_attempt in range(1, parent_prior_attempts + 1):
-        parent_attempt_count = parent_attempt
         print(
-            "[prior-parent] reviewing child priors "
+            "[prior-parent-skill] "
+            f"stage_idx={stage_idx} skill_idx={skill_idx} "
             f"attempt={parent_attempt}/{parent_prior_attempts}",
             flush=True,
         )
@@ -654,172 +768,106 @@ def run_parent_prior(
             response, metadata = gemini_client.generate_json(
                 system_instruction=system_instruction,
                 prompt=prompt,
-                required_keys=PARENT_PRIOR_KEYS,
+                required_keys=PARENT_REVIEW_KEYS,
             )
-            break
-        except KeyboardInterrupt as exc:
-            parent_checkpoint: JsonObject = {
-                "status": checkpoint_status(exc),
-                "agent_type": "parent_review_agent",
-                "task_name": episode.task_name,
-                "annotation_json": str(episode.annotation_json),
-                "image_root": str(episode.image_root),
-                "prior_min_items": prior_min_items,
-                "parent_prior_attempts": parent_prior_attempts,
-                "current_request": {
-                    "phase": "parent_prior",
-                    "parent_attempt": parent_attempt,
-                    "parent_prior_attempts": parent_prior_attempts,
-                },
-                "error": error_to_json(exc),
-                "subtask_prior_count": len(subtask_results),
-                "subtask_priors": subtask_results,
-            }
-            save_checkpoint(output_path, parent_checkpoint)
+            return build_parent_review_skill(response, child_prior), metadata, review_errors, parent_attempt
+        except KeyboardInterrupt:
             raise
         except Exception as exc:
             error = error_to_json(exc)
-            parent_errors.append(error)
+            error["stage_idx"] = stage_idx
+            error["skill_idx"] = skill_idx
+            error["parent_attempt"] = parent_attempt
+            review_errors.append(error)
             print(
-                "[retry] parent_prior_failed "
+                "[retry] parent_skill_review_failed "
+                f"stage_idx={stage_idx} skill_idx={skill_idx} "
                 f"attempt={parent_attempt}/{parent_prior_attempts} "
                 f"error={error['type']}: {error['message']}",
                 flush=True,
             )
             if parent_attempt < parent_prior_attempts:
                 time.sleep(min(3.0, float(parent_attempt)))
-                continue
-            parent_prior = build_parent_prior_fallback(
-                episode=episode,
-                subtask_results=subtask_results,
-                prior_min_items=prior_min_items,
-                parent_prior_attempts=parent_prior_attempts,
-                parent_errors=parent_errors,
-            )
-            write_json(output_path, parent_prior)
-            print(f"[fallback-saved] {output_path}", flush=True)
-            return parent_prior
-    response = normalize_parent_prior_response(response)
-    response = merge_parent_response_with_child_priors(response, subtask_results)
-    parent_prior: JsonObject = {
-        "status": "complete",
-        "agent_type": "parent_review_agent",
-        "task_name": episode.task_name,
-        "annotation_json": str(episode.annotation_json),
-        "image_root": str(episode.image_root),
-        "prior_min_items": prior_min_items,
-        "parent_prior_attempts": parent_prior_attempts,
-        "parent_attempt_count": parent_attempt_count,
-        "model_response": response,
-        "subtask_prior_count": len(subtask_results),
-        "subtask_priors": subtask_results,
-    }
-    if metadata:
-        parent_prior["google_response_metadata"] = metadata
-    parent_prior = sanitize_visual_guidance(parent_prior)
-    write_json(output_path, parent_prior)
-    print(f"[saved] {output_path}", flush=True)
-    return parent_prior
+
+    return (
+        build_parent_skill_review_fallback(child_prior, review_errors[-1] if review_errors else {}),
+        {},
+        review_errors,
+        parent_prior_attempts,
+    )
 
 
-def build_parent_prior_fallback(
-    *,
+def build_parent_review_global_context(
     episode: EpisodeData,
     subtask_results: List[JsonObject],
-    prior_min_items: int,
-    parent_prior_attempts: int,
-    parent_errors: List[JsonObject],
 ) -> JsonObject:
-    response = merge_parent_response_with_child_priors(
-        {
-            "task_summary": episode.task_name,
-            "skills": [],
-        },
-        subtask_results,
-    )
-    parent_prior: JsonObject = {
-        "status": "parent_failed_child_fallback",
-        "usable_for_generation": True,
-        "agent_type": "parent_review_agent",
+    return {
         "task_name": episode.task_name,
         "annotation_json": str(episode.annotation_json),
         "image_root": str(episode.image_root),
-        "prior_min_items": prior_min_items,
-        "parent_prior_attempts": parent_prior_attempts,
-        "parent_attempt_count": len(parent_errors),
-        "model_response": response,
-        "parent_errors": parent_errors,
-        "parent_error": parent_errors[-1] if parent_errors else {},
-        "subtask_prior_count": len(subtask_results),
-        "subtask_priors": subtask_results,
+        "skill_order": [compact_child_prior_for_context(child) for child in subtask_results],
     }
-    return sanitize_visual_guidance(parent_prior)
 
 
-def normalize_parent_prior_response(response: JsonObject) -> JsonObject:
-    cleaned = sanitize_visual_guidance(response)
+def compact_child_prior_for_context(child_prior: JsonObject) -> JsonObject:
+    keys = (
+        "stage_idx",
+        "skill_idx",
+        "skill_description",
+        "object_id",
+        "manuipation_object_id",
+        "subtask_name",
+        "skill_type_hypothesis",
+        "target_binding",
+    )
     return {
-        "task_summary": cleaned.get("task_summary", ""),
-        "skills": cleaned.get("skills", []),
+        key: child_prior.get(key)
+        for key in keys
+        if has_prompt_value(child_prior.get(key))
     }
+
+
+def compact_child_prior_for_parent_review(child_prior: JsonObject) -> JsonObject:
+    keys = (
+        "stage_idx",
+        "skill_idx",
+        "skill_description",
+        "object_id",
+        "manuipation_object_id",
+        "frame_duration",
+        "sample_count",
+        "summary_sampling_policy",
+        *CHILD_PRIOR_SNAPSHOT_KEYS,
+    )
+    return {
+        key: child_prior.get(key)
+        for key in keys
+        if has_prompt_value(child_prior.get(key))
+    }
+
+
+def build_parent_skill_review_fallback(child_prior: JsonObject, error: JsonObject) -> JsonObject:
+    review = build_parent_review_skill(
+        {
+            "review_status": "review_failed_child_fallback",
+            "review_notes": [
+                "The per-skill parent review request failed or returned invalid JSON. "
+                "Use the attached child_prior_snapshot for generation and inspect parent_errors for details."
+            ],
+            "parent_review_guidance": (
+                "Parent review was not available for this skill; child prior fields remain the "
+                "primary generation guidance."
+            ),
+        },
+        child_prior,
+    )
+    if error:
+        review["review_error"] = error
+    return sanitize_visual_guidance(review)
 
 
 def has_prompt_value(value: object) -> bool:
     return value not in (None, "", [], {})
-
-
-def merge_parent_response_with_child_priors(
-    parent_response: JsonObject,
-    child_priors: List[JsonObject],
-) -> JsonObject:
-    child_by_stage = {
-        child["stage_idx"]: child
-        for child in child_priors
-        if isinstance(child.get("stage_idx"), int)
-    }
-    child_by_skill = {
-        str(child["skill_idx"]): child
-        for child in child_priors
-        if child.get("skill_idx") is not None
-    }
-    parent_skills = parent_response.get("skills")
-    if not isinstance(parent_skills, list):
-        parent_skills = []
-
-    merged_skills: List[JsonObject] = []
-    used_child_stages = set()
-    for parent_skill in parent_skills:
-        if not isinstance(parent_skill, dict):
-            continue
-        child = find_matching_child_prior(parent_skill, child_by_stage, child_by_skill)
-        merged = build_parent_review_skill(parent_skill, child)
-        stage_idx = merged.get("stage_idx")
-        if isinstance(stage_idx, int):
-            used_child_stages.add(stage_idx)
-        merged_skills.append(merged)
-
-    for child in child_priors:
-        stage_idx = child.get("stage_idx")
-        if isinstance(stage_idx, int) and stage_idx in used_child_stages:
-            continue
-        merged_skills.append(build_parent_review_skill({}, child))
-
-    return {
-        "task_summary": parent_response.get("task_summary", ""),
-        "skills": merged_skills,
-    }
-
-
-def find_matching_child_prior(parent_skill: JsonObject, child_by_stage, child_by_skill) -> JsonObject:
-    stage_idx = parent_skill.get("stage_idx")
-    if isinstance(stage_idx, int) and stage_idx in child_by_stage:
-        return child_by_stage[stage_idx]
-    skill_idx = parent_skill.get("skill_idx")
-    if skill_idx is not None:
-        child = child_by_skill.get(str(skill_idx))
-        if isinstance(child, dict):
-            return child
-    return {}
 
 
 def build_parent_review_skill(parent_skill: JsonObject, child_prior: JsonObject) -> JsonObject:
@@ -829,6 +877,8 @@ def build_parent_review_skill(parent_skill: JsonObject, child_prior: JsonObject)
         child_value = child_prior.get(key)
         if key in PARENT_REVIEW_LIST_FIELDS:
             value = merge_string_lists([parent_value])
+        elif key in PARENT_REVIEW_CHILD_IDENTITY_FIELDS:
+            value = child_value if has_prompt_value(child_value) else parent_value
         else:
             value = parent_value if has_prompt_value(parent_value) else child_value
         if has_prompt_value(value):

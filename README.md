@@ -102,7 +102,7 @@ outputs/episode_0001/prior/
   autolabel_prompt_info.json
 ```
 
-`autolabel_prompt_info.json` 是 `generate_dataset.py` 的首选输入。`task_prior.json` 是同一份 prior 信息的主文件；正常情况下两者内容一致。父 agent 审查阶段会按 `--parent-prior-attempts` 做多轮完整请求，默认 3 轮；每一轮完整请求内部仍然会按 `--max-response-retries` 处理无效 JSON 修复。如果父 agent 多轮后仍返回无效 JSON 或 API 报错，但所有子 agent prior 已经完成，程序会自动写出 child-only fallback 的 `task_prior.json` 和 `autolabel_prompt_info.json`，其中 `status` 为 `parent_failed_child_fallback`，`usable_for_generation` 为 `true`。这种 fallback 仍可用于 generation，因为逐帧 generation 默认只读取 child prior 的 `generation_prompt_guidance` 和结构化 guardrails，父 agent 审查字段不作为 generation 规则注入。
+`autolabel_prompt_info.json` 是 `generate_dataset.py` 的首选输入。`task_prior.json` 是同一份 prior 信息的主文件；正常情况下两者内容一致。父 agent 审查阶段会按 skill 拆分：每个 child prior 单独请求一个 parent review agent，`--parent-prior-attempts` 表示单个 skill review 的最大重试轮数，默认 3 轮；每一轮内部仍然会按 `--max-response-retries` 处理无效 JSON 修复。如果某个 skill 的 parent review 多轮后仍返回无效 JSON 或 API 报错，程序只给该 skill 写入 `review_failed_child_fallback`，继续保存可用于 generation 的 `task_prior.json` 和 `autolabel_prompt_info.json`，其中 `status` 为 `partial_skill_review_fallback`，`usable_for_generation` 为 `true`。这种 fallback 仍可用于 generation，因为逐帧 generation 默认只读取 child prior 的 `generation_prompt_guidance` 和结构化 guardrails，父 agent 审查字段不作为 generation 规则注入。
 
 Prompt information structure for each skill:
 
@@ -497,7 +497,7 @@ frame_observation_schemas 已完成帧的结构化观测列表，用于 child-su
 
 如果中断发生在子任务汇总请求中，同一个 `subtask_XX_prior.json` 会保留 frame-level preliminary prior 和错误信息。如果中断发生在父 agent 审查阶段，`task_prior.json` 会保存已完成的全部子任务结果和父阶段错误信息。
 
-如果不是键盘中断，而是父 agent 自身返回无效 JSON、请求超时或 API 报错，程序会先按 `--parent-prior-attempts` 重试父 agent 完整请求。默认 3 轮父 agent 请求，每轮内部仍会使用 `--max-response-retries`。如果多轮后仍失败，程序不会丢弃已完成的子 agent 结果；它会保存一个可用于 generation 的 child-only fallback：
+如果不是键盘中断，而是父 agent 自身返回无效 JSON、请求超时或 API 报错，程序会对当前 skill 按 `--parent-prior-attempts` 重试 parent review 请求。默认每个 skill 3 轮父 agent 请求，每轮内部仍会使用 `--max-response-retries`。如果某个 skill 多轮后仍失败，程序不会丢弃已完成的子 agent 结果，也不会阻断其他 skill；它会保存一个可用于 generation 的 per-skill review fallback：
 
 ```text
 outputs/episode_0001/prior/task_prior.json
@@ -507,11 +507,12 @@ outputs/episode_0001/prior/autolabel_prompt_info.json
 该文件会包含：
 
 ```text
-status                  parent_failed_child_fallback
+status                  complete 或 partial_skill_review_fallback
 usable_for_generation   true
-parent_prior_attempts   父 agent 最大完整请求轮数
-parent_attempt_count    实际父 agent 请求轮数
-parent_errors           每轮失败的异常类型、错误消息和 traceback
+parent_prior_attempts   单个 skill parent review 的最大请求轮数
+parent_attempt_count    实际 parent review 请求总轮数
+reviewed_subtask_count  已写入 parent review 或 review fallback 的 skill 数
+parent_errors           失败 skill/attempt 的异常类型、错误消息和 traceback
 subtask_priors          已完成的 child prior 结果
 ```
 
@@ -597,7 +598,7 @@ generation_user
 --max-response-retries      无效 JSON 响应重试次数
 --sample-k                  prior 阶段每个 skill 的均匀采样帧数
 --prior-min-items           prior 阶段每个 skill 列表字段的最少条数，默认 4
---parent-prior-attempts     父 agent 完整请求重试轮数，默认 3；全部失败后写 child-only fallback
+--parent-prior-attempts     单个 skill 的 parent review 请求重试轮数，默认 3；失败后只给该 skill 写 review fallback
 --request-delay             每次请求后的等待秒数
 --include-previous-image    generation 时同时传入上一个采样帧
 --episode-offset            批量模式跳过前 N 个 episode

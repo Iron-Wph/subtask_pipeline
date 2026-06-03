@@ -51,8 +51,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_PARENT_PRIOR_ATTEMPTS,
         help=(
-            "Full parent-agent request attempts before child-only fallback. Each attempt still uses "
-            "--max-response-retries for invalid JSON repair."
+            "Per-skill parent review request attempts before that skill gets a review fallback. "
+            "Each attempt still uses --max-response-retries for invalid JSON repair."
         ),
     )
     prior.add_argument("--request-delay", type=float, default=0.0)
@@ -110,8 +110,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_PARENT_PRIOR_ATTEMPTS,
         help=(
-            "Full parent-agent request attempts before child-only fallback. Each attempt still uses "
-            "--max-response-retries for invalid JSON repair."
+            "Per-skill parent review request attempts before that skill gets a review fallback. "
+            "Each attempt still uses --max-response-retries for invalid JSON repair."
         ),
     )
     run_all.add_argument("--frame-stride", type=int, default=80)
