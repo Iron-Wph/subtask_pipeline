@@ -641,20 +641,10 @@ def is_completed_response(response: JsonObject) -> bool:
 
 
 def is_label_usable(response: JsonObject) -> bool:
-    status = response.get("current_skill_status")
-    if isinstance(status, str) and status.strip().lower().replace(" ", "_").replace("-", "_") == "no_for_sure":
-        return False
     return True
 
 
 def build_result_filter(response: JsonObject) -> JsonObject:
-    status = response.get("current_skill_status")
-    if isinstance(status, str) and status.strip().lower().replace(" ", "_").replace("-", "_") == "no_for_sure":
-        return {
-            "reason": "no_for_sure",
-            "label_used": False,
-            "description": "The model marked the frame as visually uncertain, so this label is not used as supervision.",
-        }
     return {
         "reason": "unusable_model_response",
         "label_used": False,

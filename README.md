@@ -442,7 +442,7 @@ python api_subtask_auto_label.py generate \
 
 After the first-pass generation finishes, the episode output runs a temporal validation pass per skill segment. The pass scans backward, keeps the last completed block as the accepted completion interval, and repeats any earlier `completed` response that appears before a later non-completed barrier. Repeated records keep the original response under `temporal_retry.original_model_response` and set `temporal_retry.repeated` to `true`.
 
-`result_used` means the final label is usable for supervision. `no_for_sure` records set `result_used` to `false` and include `result_filter.reason = "no_for_sure"`. `context_source_used` stays `true` because the record was still part of the original online memory/context chain; temporal retries do not rerun later frames.
+`result_used` means the final label is kept in the generated output. `no_for_sure` records are kept with `result_used = true`; their `model_response.is_subtask_completed` remains `false`. `context_source_used` stays `true` because the record was still part of the original online memory/context chain; temporal retries do not rerun later frames.
 
 ## 批量目录模式
 
