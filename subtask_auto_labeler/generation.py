@@ -59,14 +59,6 @@ TEMPORAL_CORRECTION_PROMPT = (
     "a non-completed transition is directly visible. Rewrite reasoning and new_memory so they are "
     "consistent with a non-completed label. Return only valid JSON."
 )
-COMPLETION_BACKFILL_PROMPT = (
-    "Missing completion backfill:\n"
-    "No request in this same skill segment returned is_subtask_completed=true. This is the final sampled "
-    "request for the current candidate skill, so this repeated request must return the candidate skill as "
-    "completed. Set current_skill_status to completed and is_subtask_completed to true. Rewrite reasoning, "
-    "new_memory, subtask, and visible_transition so they are consistent with a completed final request. "
-    "Return only valid JSON."
-)
 
 
 def run_generation_pipeline(
@@ -465,13 +457,7 @@ def apply_temporal_completion_validation(
     request_delay: float,
 ) -> JsonObject:
     mark_label_usage(records)
-    backfill_summary = apply_missing_completion_backfill(
-        records=records,
-        prompt_catalog=prompt_catalog,
-        gemini_client=gemini_client,
-        system_instruction=system_instruction,
-        request_delay=request_delay,
-    )
+    backfill_summary = summarize_missing_completion_segments(records)
     retry_records = find_temporal_retry_records(records)
     summary: JsonObject = {
         "strategy": "retry_completed_before_later_non_completed_barrier",
@@ -542,101 +528,50 @@ def apply_temporal_completion_validation(
     return summary
 
 
-def apply_missing_completion_backfill(
-    *,
-    records: List[JsonObject],
-    prompt_catalog: PromptCatalog,
-    gemini_client: GeminiClient,
-    system_instruction: str,
-    request_delay: float,
-) -> JsonObject:
-    backfill_records = find_missing_completion_backfill_records(records)
+def summarize_missing_completion_segments(records: List[JsonObject]) -> JsonObject:
+    missing_segments = find_missing_completion_segments(records)
     summary: JsonObject = {
-        "strategy": "force_last_request_completed_when_skill_has_no_completed_labels",
+        "strategy": "preserve_model_outputs_when_skill_has_no_completed_labels",
         "checked": True,
-        "retry_count": len(backfill_records),
-        "retried_request_indices": [
-            record.get("request_input", {}).get("request_index") for record in backfill_records
-        ],
+        "retry_count": 0,
+        "retried_request_indices": [],
+        "preserved_stage_count": len(missing_segments),
+        "preserved_stages": missing_segments,
+        "note": (
+            "If a skill segment has no model_response.is_subtask_completed=true records, generation "
+            "now preserves the original model outputs. No final request is repeated or forced completed."
+        ),
     }
-    if not backfill_records:
-        return summary
-
-    completed_retry_count = 0
-    for retry_index, record in enumerate(backfill_records, start=1):
-        request_input = record.get("request_input")
-        if not isinstance(request_input, dict):
-            continue
-        completed_retry_count += 1
-        original_model_response = dict(record.get("model_response", {}))
-        original_metadata = record.pop("google_response_metadata", None)
-        correction_prompt = build_completion_backfill_prompt(prompt_catalog, request_input)
-        image_paths = build_retry_image_paths(request_input)
-        print(
-            "[completion-backfill-retry] "
-            f"request_index={request_input.get('request_index')} "
-            f"stage_idx={record.get('stage_idx')} frame={record.get('frame_number')}",
-            flush=True,
-        )
-        response, metadata = gemini_client.generate_json(
-            system_instruction=system_instruction,
-            prompt=correction_prompt,
-            image_paths=image_paths,
-            required_keys=MODEL_RESPONSE_KEYS,
-        )
-        corrected_response = normalize_model_response(response)
-        correction_gate = force_completion_backfill_completed(corrected_response)
-        record["model_response"] = corrected_response
-        record["context_source_used"] = True
-        record["result_used"] = is_label_usable(corrected_response)
-        record["completion_backfill_retry"] = {
-            "repeated": True,
-            "retry_index": retry_index,
-            "reason": (
-                "No response in this skill segment originally returned is_subtask_completed=true, "
-                "so the final request was repeated with a forced completion instruction."
-            ),
-            "correction_instruction": COMPLETION_BACKFILL_PROMPT,
-            "original_model_response": original_model_response,
-        }
-        if original_metadata is not None:
-            record["completion_backfill_retry"]["original_google_response_metadata"] = original_metadata
-        if correction_gate:
-            record["completion_backfill_retry"]["correction_gate"] = correction_gate
-        if metadata:
-            record["google_response_metadata"] = metadata
-        if not record["result_used"]:
-            record["result_filter"] = build_result_filter(corrected_response)
-        else:
-            record.pop("result_filter", None)
-        if request_delay > 0 and retry_index < len(backfill_records):
-            time.sleep(request_delay)
-    summary["completed_retry_count"] = completed_retry_count
     return summary
 
 
-def find_missing_completion_backfill_records(records: List[JsonObject]) -> List[JsonObject]:
+def find_missing_completion_segments(records: List[JsonObject]) -> List[JsonObject]:
     by_stage: Dict[int, List[JsonObject]] = {}
     for record in records:
         stage_idx = record.get("stage_idx")
         if isinstance(stage_idx, int):
             by_stage.setdefault(stage_idx, []).append(record)
 
-    backfill_records: List[JsonObject] = []
-    for stage_records in by_stage.values():
+    missing_segments: List[JsonObject] = []
+    for stage_idx, stage_records in by_stage.items():
         if not stage_records:
             continue
         if any(has_completed_label(record) for record in stage_records):
             continue
         final_record = stage_records[-1]
-        final_record["completion_backfill_candidate"] = {
-            "reason": (
-                "no response in this skill segment had model_response.is_subtask_completed=true; "
-                "the final request must be repeated and forced completed"
-            ),
-        }
-        backfill_records.append(final_record)
-    return backfill_records
+        request_input = final_record.get("request_input")
+        missing_segments.append(
+            {
+                "stage_idx": stage_idx,
+                "skill_idx": final_record.get("skill_idx"),
+                "record_count": len(stage_records),
+                "final_request_index": (
+                    request_input.get("request_index") if isinstance(request_input, dict) else None
+                ),
+                "final_frame_number": final_record.get("frame_number"),
+            }
+        )
+    return missing_segments
 
 
 def mark_label_usage(records: List[JsonObject]) -> None:
@@ -712,24 +647,6 @@ def build_temporal_correction_prompt(prompt_catalog: PromptCatalog, request_inpu
     return f"{prompt}\n\n{TEMPORAL_CORRECTION_PROMPT}"
 
 
-def build_completion_backfill_prompt(prompt_catalog: PromptCatalog, request_input: JsonObject) -> str:
-    has_previous_image = bool(request_input.get("previous_image_path"))
-    prompt_values = {
-        "task_name": request_input.get("main_task", ""),
-        "old_memory": request_input.get("old_memory", ""),
-        "skill_description": request_input.get("skill_description", ""),
-        "object_id": request_input.get("object_id", ""),
-        "manuipation_object_id": request_input.get("manuipation_object_id", ""),
-        "frame_duration": request_input.get("frame_duration", []),
-        "frame_number": request_input.get("frame_number", ""),
-        "image_block": build_image_block(has_previous_image),
-        "completion_gate_context": request_input.get("completion_gate_context", ""),
-        "completion_guidance": request_input.get("completion_guidance", ""),
-    }
-    prompt = prompt_catalog.render("generation_user", prompt_values)
-    return f"{prompt}\n\n{COMPLETION_BACKFILL_PROMPT}"
-
-
 def build_retry_image_paths(request_input: JsonObject) -> List[Path]:
     image_paths: List[Path] = []
     previous_image_path = request_input.get("previous_image_path")
@@ -756,26 +673,6 @@ def force_temporal_retry_non_completed(response: JsonObject) -> Optional[JsonObj
         "original_is_subtask_completed": original_is_completed,
         "forced_current_skill_status": "in_progress",
         "forced_is_subtask_completed": False,
-    }
-
-
-def force_completion_backfill_completed(response: JsonObject) -> Optional[JsonObject]:
-    original_status = response.get("current_skill_status")
-    original_is_completed = response.get("is_subtask_completed")
-    if response.get("is_subtask_completed") is True and original_status in COMPLETED_STATUSES:
-        return None
-    response["current_skill_status"] = "completed"
-    response["is_subtask_completed"] = True
-    return {
-        "rule": "completion_backfill_must_complete",
-        "reason": (
-            "The backfill retry did not return a completed label, so the final request was forced to "
-            "is_subtask_completed=true."
-        ),
-        "original_current_skill_status": original_status,
-        "original_is_subtask_completed": original_is_completed,
-        "forced_current_skill_status": "completed",
-        "forced_is_subtask_completed": True,
     }
 
 
