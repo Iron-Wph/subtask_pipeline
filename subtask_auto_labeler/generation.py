@@ -1041,6 +1041,10 @@ def build_completion_guidance(global_prompt_info: JsonObject, subtask_prior: Jso
             lines.append("")
             lines.append("Child-agent structured visual state guardrails:")
             lines.append(child_state_guidance)
+        state_change_note = render_state_change_identity_note(child_prior)
+        if state_change_note:
+            lines.append("")
+            lines.append(state_change_note)
     else:
         if lines:
             lines.append("")
@@ -1061,6 +1065,43 @@ def build_completion_guidance(global_prompt_info: JsonObject, subtask_prior: Jso
         "the required visible result state."
     )
     return "\n".join(lines)
+
+
+def render_state_change_identity_note(child_prior: JsonObject) -> str:
+    if not is_state_change_prior(child_prior):
+        return ""
+    return (
+        "State-change target identity note: treat color or state words such as green, on, illuminated, "
+        "depressed, red, or off as the state of the same target part, not as the target object's identity. "
+        "Do not search for a separate final-color object such as a different green button or light. If the "
+        "current image shows the target button or control but it remains in the initial state, judge that "
+        "same visible part as not completed instead of saying the final-state button is invisible. If the "
+        "same target part is hidden or its color/state is unclear, use no_for_sure rather than completed."
+    )
+
+
+def is_state_change_prior(child_prior: JsonObject) -> bool:
+    text_parts = [
+        child_prior.get("skill_type_hypothesis"),
+        child_prior.get("skill_description"),
+        child_prior.get("subtask_name"),
+        child_prior.get("generation_prompt_guidance"),
+    ]
+    text = " ".join(str(part).lower() for part in text_parts if has_prompt_value(part))
+    state_change_markers = (
+        "state_change",
+        "press",
+        "toggle",
+        "switch",
+        "turn_on",
+        "turn_off",
+        "turn-off",
+        "turn on",
+        "turn off",
+        "button",
+        "power",
+    )
+    return any(marker in text for marker in state_change_markers)
 
 
 def render_child_structured_guardrails(child_prior: JsonObject) -> str:
