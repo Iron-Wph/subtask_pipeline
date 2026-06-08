@@ -460,16 +460,16 @@ def apply_temporal_completion_validation(
     backfill_summary = summarize_missing_completion_segments(records)
     retry_records = find_temporal_retry_records(records)
     summary: JsonObject = {
-        "strategy": "retry_completed_before_later_non_completed_barrier",
+        "strategy": "retry_completed_outside_final_completed_suffix",
         "checked": True,
         "stage_count": len({record.get("stage_idx") for record in records}),
         "missing_completion_backfill": backfill_summary,
         "retry_count": len(retry_records),
         "retried_request_indices": [record.get("request_input", {}).get("request_index") for record in retry_records],
         "note": (
-            "For each skill segment, scan backward to find the last completed block. Completed responses "
-            "before the first earlier non-completed barrier are repeated with a correction prompt that "
-            "requires a non-completed label."
+            "For each skill segment, accept completed labels only in the final suffix where the skill "
+            "still ends completed. Completed responses outside that final completed suffix are repeated "
+            "with a correction prompt that requires a non-completed label."
         ),
     }
     if not retry_records:
@@ -506,8 +506,8 @@ def apply_temporal_completion_validation(
             "repeated": True,
             "retry_index": retry_index,
             "reason": (
-                "This request originally returned completed before a later non-completed barrier in "
-                "the same skill segment."
+                "This request originally returned completed outside the final accepted completed suffix "
+                "of the same skill segment."
             ),
             "correction_instruction": TEMPORAL_CORRECTION_PROMPT,
             "original_model_response": original_model_response,
@@ -598,31 +598,34 @@ def find_temporal_retry_records(records: List[JsonObject]) -> List[JsonObject]:
 
     retry_records: List[JsonObject] = []
     for stage_records in by_stage.values():
-        completed_run = find_last_completed_run(stage_records)
-        if completed_run is None:
-            continue
-        run_start, _ = completed_run
-        for record in stage_records[:run_start]:
+        completed_suffix = find_final_completed_run(stage_records)
+        if completed_suffix is None:
+            records_to_scan = stage_records
+            reason = (
+                "completed response does not belong to a final completed suffix because this skill "
+                "segment ends without a completed label"
+            )
+        else:
+            suffix_start, _ = completed_suffix
+            records_to_scan = stage_records[:suffix_start]
+            reason = (
+                "completed response appears before the final accepted completed suffix and before "
+                "a later non-completed barrier in the same skill segment"
+            )
+        for record in records_to_scan:
             if is_completed_record(record):
                 record["temporal_retry_candidate"] = {
-                    "reason": (
-                        "completed response appears before the final accepted completed block and before "
-                        "a later non-completed barrier in the same skill segment"
-                    ),
+                    "reason": reason,
                 }
                 retry_records.append(record)
     return retry_records
 
 
-def find_last_completed_run(stage_records: List[JsonObject]) -> Optional[tuple[int, int]]:
-    end_index: Optional[int] = None
-    for index in range(len(stage_records) - 1, -1, -1):
-        if is_completed_record(stage_records[index]):
-            end_index = index
-            break
-    if end_index is None:
+def find_final_completed_run(stage_records: List[JsonObject]) -> Optional[tuple[int, int]]:
+    if not stage_records or not is_completed_record(stage_records[-1]):
         return None
 
+    end_index = len(stage_records) - 1
     start_index = end_index
     while start_index > 0 and is_completed_record(stage_records[start_index - 1]):
         start_index -= 1
