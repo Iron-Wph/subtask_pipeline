@@ -88,6 +88,30 @@ CHILD_PRIOR_SNAPSHOT_KEYS = (
 )
 RUNNING_PRIOR_CONTEXT_MAX_ITEMS = 12
 RUNNING_PRIOR_CONTEXT_RECENT_FRAMES = 3
+STATE_CHANGE_TARGET_IDENTITY_REVIEW_RULES = (
+    "State-change target identity review rules:\n"
+    "- Apply these rules only to state-change skills such as pressing, toggling, switching, activating, "
+    "deactivating, turning on, or turning off.\n"
+    "- In every state-change field, separate the stable physical target identity from the required final "
+    "state. Stable identity means the same physical target part named by object, location, shape, panel "
+    "position, control role, or initial/neutral state. Final-state descriptors such as color, on/off, "
+    "active/inactive, illuminated/unlit, selected/unselected, pose, display text, or indicator state are "
+    "state predicates for that same part, not the target object's name.\n"
+    "- This separation is required across target_binding, subtask_name, target_visual_description, "
+    "pre_completion_state, in_progress_state, completion_gates, completion_conditions, "
+    "required_visual_evidence, state_transition_evidence, negative_conditions, "
+    "not_sufficient_for_completion, common_false_positives, ambiguous_cases, and "
+    "generation_prompt_guidance.\n"
+    "- Do not write before-completion, in-progress, negative, insufficient, ambiguous, or false-positive "
+    "items as if a final-state object is visible, hidden, or partially visible. Instead, describe the same "
+    "stable target part as visible but still in the initial/negative/intermediate state, or hidden with its "
+    "state unverifiable.\n"
+    "- Completion gates for a state-change skill must use two separate AND facts: the same stable target "
+    "part is directly visible, and that same part directly shows the required final state. Do not collapse "
+    "these into a phrase that names the target solely by the required final state.\n"
+    "- If a child prior or draft field names the target solely by its required final state, rewrite the "
+    "field before returning JSON."
+)
 
 
 def run_prior_pipeline(
@@ -525,6 +549,13 @@ def merge_observed_object_names(frame_results: List[JsonObject]) -> List[str]:
     return names
 
 
+def render_prior_review_rubric(prompt_catalog: PromptCatalog) -> str:
+    return append_optional_prompt(
+        prompt_catalog.render_optional("prior_review_rubric", {}),
+        STATE_CHANGE_TARGET_IDENTITY_REVIEW_RULES,
+    )
+
+
 def consolidate_subtask_prior(
     *,
     episode: EpisodeData,
@@ -548,7 +579,7 @@ def consolidate_subtask_prior(
         "preliminary_prior_json": json.dumps(summary_input, ensure_ascii=False, indent=2),
         "universal_visual_rubric": prompt_catalog.render_optional("universal_visual_rubric", {}),
         "action_primitive_rubric": prompt_catalog.render_optional("action_primitive_rubric", {}),
-        "prior_review_rubric": prompt_catalog.render_optional("prior_review_rubric", {}),
+        "prior_review_rubric": render_prior_review_rubric(prompt_catalog),
     }
     prompt = append_optional_prompt(
         prompt_catalog.render("subtask_prior_summary_user", prompt_values),
@@ -749,7 +780,7 @@ def run_single_parent_skill_review(
         ),
         "universal_visual_rubric": prompt_catalog.render_optional("universal_visual_rubric", {}),
         "action_primitive_rubric": prompt_catalog.render_optional("action_primitive_rubric", {}),
-        "prior_review_rubric": prompt_catalog.render_optional("prior_review_rubric", {}),
+        "prior_review_rubric": render_prior_review_rubric(prompt_catalog),
     }
     prompt = append_optional_prompt(
         prompt_catalog.render("parent_prior_user", prompt_values),

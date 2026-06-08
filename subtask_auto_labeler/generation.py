@@ -1081,6 +1081,20 @@ def render_state_change_identity_note(child_prior: JsonObject) -> str:
     )
 
 
+def render_state_change_guardrail_interpretation(child_prior: JsonObject) -> str:
+    if not is_state_change_prior(child_prior):
+        return ""
+    return (
+        "State-change guardrail interpretation: if any structured guardrail phrase embeds a required "
+        "final-state descriptor in the target name, reinterpret it as the same stable physical target part "
+        "plus a separate state predicate. Do not search for a different final-state object. For completion, "
+        "require both that the same target part is directly visible and that this same part directly shows "
+        "the required final state. If the same target part is visible but still shows an initial, negative, "
+        "or intermediate state, keep the skill not completed. If the same target part is hidden or its state "
+        "is unclear, use no_for_sure."
+    )
+
+
 def is_state_change_prior(child_prior: JsonObject) -> bool:
     text_parts = [
         child_prior.get("skill_type_hypothesis"),
@@ -1107,6 +1121,9 @@ def is_state_change_prior(child_prior: JsonObject) -> bool:
 
 def render_child_structured_guardrails(child_prior: JsonObject) -> str:
     lines: List[str] = []
+    interpretation = render_state_change_guardrail_interpretation(child_prior)
+    if interpretation:
+        lines.append(interpretation)
     for value, label in (
         (
             child_prior.get("pre_completion_state"),
